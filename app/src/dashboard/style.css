@@ -1,0 +1,57 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme{
+
+  --color-medium: #193245;
+}
+::-webkit-scrollbar{width: 5px !important; height: 5px !important;}
+::-webkit-scrollbar-thumb{background: #ccc;}
+::-webkit-scrollbar-track{background: #fff;}
+
+
+.light {
+    --background:#ffffff;
+    --foreground:#101011;
+    
+}
+
+/*.dark {
+    --background:#f1f6f079;
+    --foreground:#c8c8c8;
+}*/
+
+
+
+.dark {
+  --background: #000000;
+  --foreground: #ffffff;
+}
+
+.light ::-webkit-scrollbar{width: 5px !important; height: 5px !important;}
+.light ::-webkit-scrollbar-thumb{background: #ccc;}
+.light ::-webkit-scrollbar-track{background: #fff;}
+
+.dark ::-webkit-scrollbar{width: 5px !important; height: 5px !important;}
+.dark ::-webkit-scrollbar-thumb{background: #ccc;}
+.dark ::-webkit-scrollbar-track{background: #212121;}
+
+/*
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}*/
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
