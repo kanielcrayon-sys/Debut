@@ -25,26 +25,28 @@ export default function Sidebar({ collapsed }: { collapsed: boolean }){
                          sidebarmenu?.map((menu,index)=>{
                             return(
                                 <li className="w-full" key={index}>
-                                    <Button variant="text" className="w-full !capitalize 
-                                    text-left !justify-start !text-gray-700  gap-2 !font-
-                                    [600] !text-[13px] !py-3 dark:!text-white   dark:hover:!bg-gray-800">{menu?.icon}
-                                         {/* texte caché si collapsed */}
-                                         {!collapsed && <span>{menu?.title}</span>}
+                                    <Link href={menu.href}>
+                                        <Button variant="text" className="w-full !capitalize 
+                                        text-left !justify-start !text-gray-700  gap-2 !font-
+                                        [600] !text-[13px] !py-3 dark:!text-white   dark:hover:!bg-gray-800">{menu?.icon}
+                                            {/* texte caché si collapsed */}
+                                            {!collapsed && <span>{menu?.title}</span>}
 
-                                         
-                                    </Button>
-
+                                            
+                                        </Button>
+                                    </Link>
+                                        
+                                        {/* tooltip si sidebar fermé */}
+                                        {collapsed && (
+                                            <span
+                                            className="absolute left-full top-1/2 -translate-y-1/2 ml-3
+                                            bg-gray-800 text-white text-xs px-2 py-1 rounded
+                                            opacity-0 group-hover:opacity-100 transition whitespace-nowrap"
+                                            >
+                                            {menu?.title}
+                                            </span>
+                                        )}
                                     
-                                    {/* tooltip si sidebar fermé */}
-                                    {collapsed && (
-                                        <span
-                                        className="absolute left-full top-1/2 -translate-y-1/2 ml-3
-                                        bg-gray-800 text-white text-xs px-2 py-1 rounded
-                                        opacity-0 group-hover:opacity-100 transition whitespace-nowrap"
-                                        >
-                                        {menu?.title}
-                                        </span>
-                                    )}
                                 </li>
                             )
                          })

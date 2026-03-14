@@ -6,6 +6,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import SchoolIcon from '@mui/icons-material/School';
 import NoteAltIcon from '@mui/icons-material/NoteAlt';
 import HouseSidingIcon from '@mui/icons-material/HouseSiding';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
 
 export const  sidebarmenu = [
     {
@@ -20,17 +21,22 @@ export const  sidebarmenu = [
     },
     {
         title: "Professeurs",
-        href:"/Professeurs/list",
+        href:"/Professeur/list",
         icon: <Person2Icon></Person2Icon>
     },
     {
         title: "Eleves",
-        href:"/Eleves/list",
+        href:"./Eleves/List/",
         icon: <GroupIcon></GroupIcon>
+    },
+     {
+        title: "Matieres",
+        href:"/Matiere/list",
+        icon: <MenuBookIcon></MenuBookIcon>
     },
     {
         title: "Classes",
-        href:"/Classes/list",
+        href:"./Classe/list",
         icon: <HouseSidingIcon></HouseSidingIcon>
     },
      {
