@@ -1,15 +1,16 @@
 "use client"
-import React, { useState, useMemo } from "react";
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Select, MenuItem, FormControl, InputLabel, FormControlLabel, Checkbox } from "@mui/material";
-import { Eleve, Classe, CreateEleveInput, UpdateEleveInput } from "@/app/src/interface/data";
+import React, { useState, useMemo, useTransition, useEffect, useRef } from "react";
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Autocomplete } from "@mui/material";
+import { Eleve, CreateEleveInput, UpdateEleveInput, Classe, Individu } from "@/app/src/interface/data";
+import { useClasses } from "@/app/src/context/classeContext";
 
 interface EleveModalProps {
   open: boolean;
   onClose: () => void;
-  onSave: (eleve: CreateEleveInput | UpdateEleveInput) => void;
+  onSave: (data: CreateEleveInput | UpdateEleveInput) => void;
   eleve?: Eleve | null;
   isEditing?: boolean;
-  classes: Classe[]; // ✅ NOUVEAU
+  classes?: Classe[];
 }
 
 const initialFormData: CreateEleveInput = {
@@ -17,16 +18,17 @@ const initialFormData: CreateEleveInput = {
     nom_individu: "",
     prenom_individu: "",
     date_naissance: "",
-    sexe: "M",
+    sexe: "",
     ville: "",
-    nationalite: "Française",
+    nationalite: "",
     email: "",
     contact: "",
     vehicule: "",
   },
-  id_classe: "1",
+  id_classe: "",
+  classe: "",
   date_premier_inscription: new Date().toISOString().split("T")[0],
-  en_regle: true,
+  en_regle: false,
   gbevou: false,
   statut_eleve: "actif",
   nom_tuteur: "",
@@ -40,55 +42,110 @@ export default function EleveModal({
   onSave,
   eleve,
   isEditing = false,
-  classes, // ✅ NOUVEAU
+  classes: propClasses,
 }: EleveModalProps) {
-  const [formData, setFormData] = useState<CreateEleveInput>(initialFormData);
+  const { classes: contextClasses } = useClasses();
+  const classes = propClasses || contextClasses;
+  const [_, startTransition] = useTransition();
+  const isInitialized = useRef(false);
+  
+  const activeClasses = useMemo(() => {
+    return classes.filter(c => !c.statut_classe || c.statut_classe === "actif");
+  }, [classes]);
 
-  const defaultFormData = useMemo(() => {
-    if (open && eleve && isEditing) {
-      return {
-        identite: eleve.identite,
-        id_classe: eleve.id_classe,
-        date_premier_inscription: eleve.date_premier_inscription,
-        en_regle: eleve.en_regle,
-        gbevou: eleve.gbevou,
-        statut_eleve: eleve.statut_eleve,
-        nom_tuteur: eleve.nom_tuteur,
-        profession_tuteur: eleve.profession_tuteur,
-        contact_tuteur: eleve.contact_tuteur,
-      };
+  const [formValues, setFormValues] = useState<CreateEleveInput>(initialFormData);
+
+  // ✅ INITIALISER QUAND LE MODAL S'OUVRE
+  useEffect(() => {
+    if (open && !isInitialized.current) {
+      isInitialized.current = true;
+      console.log("📍 Initializing form for modal open");
+      
+      if (isEditing && eleve && eleve.identite) {
+        console.log("✅ Loading eleve data:", eleve);
+        startTransition(() => {
+          setFormValues({
+            identite: eleve.identite,
+            id_classe: eleve.id_classe || "",
+            classe: eleve.classe || "",
+            date_premier_inscription: eleve.date_premier_inscription || initialFormData.date_premier_inscription,
+            en_regle: eleve.en_regle || false,
+            gbevou: eleve.gbevou || false,
+            statut_eleve: eleve.statut_eleve || "actif",
+            nom_tuteur: eleve.nom_tuteur || "",
+            profession_tuteur: eleve.profession_tuteur || "",
+            contact_tuteur: eleve.contact_tuteur || "",
+          });
+        });
+      } else {
+        console.log("➕ Empty form");
+        startTransition(() => {
+          setFormValues(initialFormData);
+        });
+      }
     }
-    return initialFormData;
-  }, [open, eleve, isEditing]);
+    
+    // Réinitialiser le flag quand le modal ferme
+    if (!open) {
+      isInitialized.current = false;
+    }
+  }, [open]);
 
-  React.useEffect(() => {
-    setFormData(defaultFormData);
-  }, [defaultFormData]);
-
-  const handleIdentiteChange = (field: string, value: string) => {
-    setFormData((prev) => ({
-      ...prev,
-      identite: {
-        ...prev.identite,
-        [field]: value,
-      },
-    }));
+  const handleIdentiteChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    startTransition(() => {
+      setFormValues((prev) => ({
+        ...prev,
+        identite: {
+          ...prev.identite,
+          [name]: value,
+        },
+      }));
+    });
   };
 
-  const handleFieldChange = (field: string, value: string | boolean) => {
-    setFormData((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
+  const handleInputChange = (field: keyof CreateEleveInput, value: string | boolean) => {
+    startTransition(() => {
+      setFormValues((prev) => ({
+        ...prev,
+        [field]: value,
+      }));
+    });
+  };
+
+  const handleClasseChange = (event: React.SyntheticEvent, value: Classe | null) => {
+    startTransition(() => {
+      setFormValues((prev) => ({
+        ...prev,
+        id_classe: value?.id || "",
+        classe: value?.libelle_classe || "",
+      }));
+    });
+  };
+
+  const handleSexeChange = (event: React.SyntheticEvent, value: string | null) => {
+    if (value) {
+      startTransition(() => {
+        setFormValues((prev) => ({
+          ...prev,
+          identite: {
+            ...prev.identite,
+            sexe: value,
+          },
+        }));
+      });
+    }
   };
 
   const handleSave = () => {
     if (
-      !formData.identite.nom_individu ||
-      !formData.identite.prenom_individu ||
-      !formData.identite.email ||
-      !formData.nom_tuteur ||
-      !formData.contact_tuteur
+      !formValues.identite.nom_individu ||
+      !formValues.identite.prenom_individu ||
+      !formValues.id_classe ||
+      !formValues.identite.date_naissance ||
+      !formValues.identite.sexe ||
+      !formValues.nom_tuteur ||
+      !formValues.contact_tuteur
     ) {
       alert("Veuillez remplir tous les champs obligatoires (*)");
       return;
@@ -96,16 +153,19 @@ export default function EleveModal({
 
     if (isEditing && eleve) {
       onSave({
+        ...formValues,
         id: eleve.id,
-        id_individu: eleve.id_individu,
-        ...formData,
       } as UpdateEleveInput);
     } else {
-      onSave(formData);
+      onSave(formValues);
     }
 
     onClose();
   };
+
+  const selectedClasse = formValues.id_classe
+    ? activeClasses.find((c) => c.id === formValues.id_classe)
+    : null;
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
@@ -115,194 +175,54 @@ export default function EleveModal({
 
       <DialogContent className="dark:bg-gray-800 mt-4">
         <div className="flex flex-col gap-4 max-h-96 overflow-y-auto">
-          {/* Identité */}
-          <div className="text-sm font-semibold text-gray-700 dark:text-gray-300 mt-2">
-            Informations Personnelles
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Identité</h3>
+            <div className="flex flex-col gap-3">
+              <TextField fullWidth label="Nom *" name="nom_individu" value={formValues.identite.nom_individu} onChange={handleIdentiteChange} variant="outlined" size="small" />
+              <TextField fullWidth label="Prénom *" name="prenom_individu" value={formValues.identite.prenom_individu} onChange={handleIdentiteChange} variant="outlined" size="small" />
+              <TextField fullWidth label="Date de naissance *" name="date_naissance" type="date" value={formValues.identite.date_naissance} onChange={handleIdentiteChange} variant="outlined" size="small" InputLabelProps={{ shrink: true }} />
+              <Autocomplete options={["M", "F"]} value={formValues.identite.sexe || null} onChange={handleSexeChange} renderInput={(params) => <TextField {...params} label="Sexe *" variant="outlined" size="small" />} />
+              <TextField fullWidth label="Email" name="email" type="email" value={formValues.identite.email} onChange={handleIdentiteChange} variant="outlined" size="small" />
+              <TextField fullWidth label="Contact" name="contact" value={formValues.identite.contact} onChange={handleIdentiteChange} variant="outlined" size="small" />
+              <TextField fullWidth label="Ville" name="ville" value={formValues.identite.ville} onChange={handleIdentiteChange} variant="outlined" size="small" />
+              <TextField fullWidth label="Nationalité" name="nationalite" value={formValues.identite.nationalite} onChange={handleIdentiteChange} variant="outlined" size="small" />
+              <TextField fullWidth label="Véhicule" name="vehicule" value={formValues.identite.vehicule} onChange={handleIdentiteChange} variant="outlined" size="small" />
+            </div>
           </div>
 
-          <TextField
-            fullWidth
-            label="Nom *"
-            value={formData.identite.nom_individu}
-            onChange={(e) => handleIdentiteChange("nom_individu", e.target.value)}
-            variant="outlined"
-            size="small"
-          />
-
-          <TextField
-            fullWidth
-            label="Prénom *"
-            value={formData.identite.prenom_individu}
-            onChange={(e) => handleIdentiteChange("prenom_individu", e.target.value)}
-            variant="outlined"
-            size="small"
-          />
-
-          <TextField
-            fullWidth
-            label="Date de Naissance"
-            type="date"
-            value={formData.identite.date_naissance}
-            onChange={(e) => handleIdentiteChange("date_naissance", e.target.value)}
-            variant="outlined"
-            size="small"
-            InputLabelProps={{ shrink: true }}
-          />
-
-          <FormControl fullWidth size="small">
-            <InputLabel>Sexe</InputLabel>
-            <Select
-              value={formData.identite.sexe}
-              onChange={(e) => handleIdentiteChange("sexe", e.target.value)}
-              label="Sexe"
-            >
-              <MenuItem value="M">Masculin</MenuItem>
-              <MenuItem value="F">Féminin</MenuItem>
-            </Select>
-          </FormControl>
-
-          <TextField
-            fullWidth
-            label="Ville"
-            value={formData.identite.ville}
-            onChange={(e) => handleIdentiteChange("ville", e.target.value)}
-            variant="outlined"
-            size="small"
-          />
-
-          <TextField
-            fullWidth
-            label="Nationalité"
-            value={formData.identite.nationalite}
-            onChange={(e) => handleIdentiteChange("nationalite", e.target.value)}
-            variant="outlined"
-            size="small"
-          />
-
-          <TextField
-            fullWidth
-            label="Email *"
-            type="email"
-            value={formData.identite.email}
-            onChange={(e) => handleIdentiteChange("email", e.target.value)}
-            variant="outlined"
-            size="small"
-          />
-
-          <TextField
-            fullWidth
-            label="Contact"
-            value={formData.identite.contact}
-            onChange={(e) => handleIdentiteChange("contact", e.target.value)}
-            variant="outlined"
-            size="small"
-          />
-
-          {/* Classe */}
-          <div className="text-sm font-semibold text-gray-700 dark:text-gray-300 mt-4">
-            Information Scolaire
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Classe</h3>
+            <Autocomplete options={activeClasses} getOptionLabel={(option) => option.libelle_classe} isOptionEqualToValue={(option, value) => option.id === value?.id} value={selectedClasse || null} onChange={handleClasseChange} renderInput={(params) => <TextField {...params} label="Classe *" variant="outlined" size="small" />} />
           </div>
 
-          <FormControl fullWidth size="small">
-            <InputLabel>Classe *</InputLabel>
-            <Select
-              value={formData.id_classe}
-              onChange={(e) => handleFieldChange("id_classe", e.target.value)}
-              label="Classe *"
-            >
-              {classes.map((classe) => (
-                <MenuItem key={classe.id} value={classe.id}>
-                  {classe.libelle_classe}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          <TextField
-            fullWidth
-            label={`Date d'Inscription`}
-            type="date"
-            value={formData.date_premier_inscription}
-            onChange={(e) => handleFieldChange("date_premier_inscription", e.target.value)}
-            variant="outlined"
-            size="small"
-            InputLabelProps={{ shrink: true }}
-          />
-
-          <FormControl fullWidth size="small">
-            <InputLabel>Statut *</InputLabel>
-            <Select
-              value={formData.statut_eleve}
-              onChange={(e) => handleFieldChange("statut_eleve", e.target.value)}
-              label="Statut *"
-            >
-              <MenuItem value="actif">Actif</MenuItem>
-              <MenuItem value="suspendu">Suspendu</MenuItem>
-              <MenuItem value="abandonné">Abandonné</MenuItem>
-            </Select>
-          </FormControl>
-
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={formData.en_regle}
-                onChange={(e) => handleFieldChange("en_regle", e.target.checked)}
-              />
-            }
-            label="En Règle"
-          />
-
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={formData.gbevou}
-                onChange={(e) => handleFieldChange("gbevou", e.target.checked)}
-              />
-            }
-            label="GBEVOU"
-          />
-
-          {/* Tuteur */}
-          <div className="text-sm font-semibold text-gray-700 dark:text-gray-300 mt-4">
-            Informations du Tuteur
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Tuteur</h3>
+            <div className="flex flex-col gap-3">
+              <TextField fullWidth label="Nom du tuteur *" value={formValues.nom_tuteur} onChange={(e) => handleInputChange("nom_tuteur", e.target.value)} variant="outlined" size="small" />
+              <TextField fullWidth label="Profession du tuteur" value={formValues.profession_tuteur} onChange={(e) => handleInputChange("profession_tuteur", e.target.value)} variant="outlined" size="small" />
+              <TextField fullWidth label="Contact du tuteur *" value={formValues.contact_tuteur} onChange={(e) => handleInputChange("contact_tuteur", e.target.value)} variant="outlined" size="small" />
+            </div>
           </div>
 
-          <TextField
-            fullWidth
-            label={`Nom du Tuteur *`}
-            value={formData.nom_tuteur}
-            onChange={(e) => handleFieldChange("nom_tuteur", e.target.value)}
-            variant="outlined"
-            size="small"
-          />
-
-          <TextField
-            fullWidth
-            label={`Profession du Tuteur`}
-            value={formData.profession_tuteur}
-            onChange={(e) => handleFieldChange("profession_tuteur", e.target.value)}
-            variant="outlined"
-            size="small"
-          />
-
-          <TextField
-            fullWidth
-            label={`Contact du Tuteur *`}
-            value={formData.contact_tuteur}
-            onChange={(e) => handleFieldChange("contact_tuteur", e.target.value)}
-            variant="outlined"
-            size="small"
-          />
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Autres informations</h3>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={formValues.en_regle} onChange={(e) => handleInputChange("en_regle", e.target.checked)} className="w-4 h-4" />
+                <span className="text-sm text-gray-900 dark:text-white">En règle</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={formValues.gbevou} onChange={(e) => handleInputChange("gbevou", e.target.checked)} className="w-4 h-4" />
+                <span className="text-sm text-gray-900 dark:text-white">GBEVOU</span>
+              </label>
+            </div>
+          </div>
         </div>
       </DialogContent>
 
       <DialogActions className="dark:bg-gray-800 p-3">
-        <Button onClick={onClose} className="dark:text-white">
-          Annuler
-        </Button>
-        <Button onClick={handleSave} variant="contained" className="!bg-blue-600">
-          {isEditing ? "Modifier" : "Ajouter"}
-        </Button>
+        <Button onClick={onClose} className="dark:text-white">Annuler</Button>
+        <Button onClick={handleSave} variant="contained" className="!bg-blue-600">{isEditing ? "Modifier" : "Ajouter"}</Button>
       </DialogActions>
     </Dialog>
   );

@@ -1,13 +1,11 @@
-
 import type { Metadata } from "next";
-//import { Geist, Geist_Mono } from "next/font/google";
-//import Sidebar from "@/app/src/components/sidebar/sidebar";
-//import Header from "@/app/src/components/headerP/header2";
 import ClientLayout from "@/app/src/dashboard/dashlayout";
-//import "./globals.css";
 import "../app/src/dashboard/style.css";
 import Provider from "./src/context/themeprovider";
-//import { useState } from "react";
+import { EleveProvider } from "@/app/src/context/eleveContext";
+import { ClasseProvider } from "@/app/src/context/classeContext";
+import { MatiereProvider } from "@/app/src/context/matiereContext";
+import { ProfesseurProvider } from "@/app/src/context/professeurContext"; // ✅ AJOUTE
 
 export const metadata: Metadata = {
   title: "Create Next App",
@@ -22,14 +20,18 @@ export default function RootLayout({
     
   return (
     <html lang="en" suppressHydrationWarning>
-      
-      <body >
-       
-       <Provider>
-          <ClientLayout>{children}</ClientLayout>
+      <body>
+        <Provider>
+          <EleveProvider>
+            <ClasseProvider>
+              <MatiereProvider>
+                <ProfesseurProvider> {/* ✅ AJOUTE */}
+                  <ClientLayout>{children}</ClientLayout>
+                </ProfesseurProvider> {/* ✅ AJOUTE */}
+              </MatiereProvider>
+            </ClasseProvider>
+          </EleveProvider>
         </Provider>
-        
-      
       </body>
     </html>
   );

@@ -26,7 +26,7 @@ export const  sidebarmenu = [
     },
     {
         title: "Eleves",
-        href:"./Eleves/List/",
+        href:"/Eleves/List/",
         icon: <GroupIcon></GroupIcon>
     },
      {
@@ -36,7 +36,7 @@ export const  sidebarmenu = [
     },
     {
         title: "Classes",
-        href:"./Classe/list",
+        href:"/Classe/list",
         icon: <HouseSidingIcon></HouseSidingIcon>
     },
      {
