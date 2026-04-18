@@ -93,22 +93,35 @@ export default function EleveModal({
 
   const handleIdentiteChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
+    
+    // ✅ METTRE EN MAJUSCULES SI C'EST LE NOM
+    let finalValue = value;
+    if (name === "nom_individu") {
+      finalValue = value.toUpperCase();
+    }
+    
     startTransition(() => {
       setFormValues((prev) => ({
         ...prev,
         identite: {
           ...prev.identite,
-          [name]: value,
+          [name]: finalValue,
         },
       }));
     });
   };
 
   const handleInputChange = (field: keyof CreateEleveInput, value: string | boolean) => {
+    // ✅ METTRE EN MAJUSCULES SI C'EST LE NOM DU TUTEUR
+    let finalValue = value;
+    if (field === "nom_tuteur" && typeof value === "string") {
+      finalValue = value.toUpperCase();
+    }
+    
     startTransition(() => {
       setFormValues((prev) => ({
         ...prev,
-        [field]: value,
+        [field]: finalValue,
       }));
     });
   };
@@ -178,7 +191,7 @@ export default function EleveModal({
           <div>
             <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Identité</h3>
             <div className="flex flex-col gap-3">
-              <TextField fullWidth label="Nom *" name="nom_individu" value={formValues.identite.nom_individu} onChange={handleIdentiteChange} variant="outlined" size="small" />
+              <TextField fullWidth label="Nom *" name="nom_individu" value={formValues.identite.nom_individu} onChange={handleIdentiteChange} variant="outlined" size="small" placeholder="Sera automatiquement en MAJUSCULES" />
               <TextField fullWidth label="Prénom *" name="prenom_individu" value={formValues.identite.prenom_individu} onChange={handleIdentiteChange} variant="outlined" size="small" />
               <TextField fullWidth label="Date de naissance *" name="date_naissance" type="date" value={formValues.identite.date_naissance} onChange={handleIdentiteChange} variant="outlined" size="small" InputLabelProps={{ shrink: true }} />
               <Autocomplete options={["M", "F"]} value={formValues.identite.sexe || null} onChange={handleSexeChange} renderInput={(params) => <TextField {...params} label="Sexe *" variant="outlined" size="small" />} />
@@ -198,7 +211,7 @@ export default function EleveModal({
           <div>
             <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Tuteur</h3>
             <div className="flex flex-col gap-3">
-              <TextField fullWidth label="Nom du tuteur *" value={formValues.nom_tuteur} onChange={(e) => handleInputChange("nom_tuteur", e.target.value)} variant="outlined" size="small" />
+              <TextField fullWidth label="Nom du tuteur *" value={formValues.nom_tuteur} onChange={(e) => handleInputChange("nom_tuteur", e.target.value)} variant="outlined" size="small" placeholder="Sera automatiquement en MAJUSCULES" />
               <TextField fullWidth label="Profession du tuteur" value={formValues.profession_tuteur} onChange={(e) => handleInputChange("profession_tuteur", e.target.value)} variant="outlined" size="small" />
               <TextField fullWidth label="Contact du tuteur *" value={formValues.contact_tuteur} onChange={(e) => handleInputChange("contact_tuteur", e.target.value)} variant="outlined" size="small" />
             </div>

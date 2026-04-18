@@ -3,6 +3,7 @@ import React, { useState, useMemo } from "react";
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, FormGroup, FormControlLabel, Checkbox, Box, Typography } from "@mui/material";
 import { Classe } from "@/app/src/interface/data";
 import { useMatieres } from "@/app/src/context/matiereContext";
+import { useClasses } from "@/app/src/context/classeContext";
 
 interface AjouterMatieresModalProps {
   open: boolean;
@@ -23,6 +24,7 @@ export default function AjouterMatieresModal({
   classe,
 }: AjouterMatieresModalProps) {
   const { matieres } = useMatieres();
+  const { classes } = useClasses();
   
   // ✅ INITIALISER DIRECTEMENT AVEC classe.id_matieres
   const [selectedMatieres, setSelectedMatieres] = useState<MatiereSelection>({
@@ -35,6 +37,33 @@ export default function AjouterMatieresModal({
     return matieres.filter(m => m.statut_matiere === "actif");
   }, [matieres]);
 
+  // ✅ FILTRER LES MATIÈRES DISPONIBLES (PAS AFFECTÉES À D'AUTRES CLASSES)
+  const availableMatieres = useMemo(() => {
+    return activeMatieres.filter(matiere => {
+      // Vérifier si cette matière est affectée à une autre classe
+      const isAffectedToOtherClass = classes.some(
+        c => c.id_matieres?.includes(matiere.id) && 
+             c.id !== classe?.id && // Sauf la classe actuelle
+             (!c.statut_classe || c.statut_classe === "actif") // Seulement les classes actives
+      );
+
+      return !isAffectedToOtherClass;
+    });
+  }, [activeMatieres, classes, classe?.id]);
+
+  // ✅ FUSIONNER: MATIÈRES DISPONIBLES + MATIÈRES DÉJÀ SÉLECTIONNÉES (pour édition)
+  const displayedMatieres = useMemo(() => {
+    const alreadySelected = activeMatieres.filter(m => 
+      selectedMatieres.ids.includes(m.id)
+    );
+    
+    const notSelected = availableMatieres.filter(m => 
+      !selectedMatieres.ids.includes(m.id)
+    );
+
+    return [...alreadySelected, ...notSelected];
+  }, [activeMatieres, availableMatieres, selectedMatieres.ids]);
+
   // ✅ QUAND LE MODAL S'OUVRE, RÉINITIALISER L'ÉTAT
   React.useEffect(() => {
     if (open && classe) {
@@ -44,7 +73,7 @@ export default function AjouterMatieresModal({
       });
       console.log("📚 Matières actuelles de la classe:", classe.matieres);
     }
-  }, [open, classe?.id]); // ✅ DÉPEND DE classe.id, PAS classe
+  }, [open, classe?.id]);
 
   const handleMatiereToggle = (matiereId: string, matiereName: string) => {
     console.log(`🔄 Toggle matière: ${matiereName} (${matiereId})`);
@@ -102,35 +131,47 @@ export default function AjouterMatieresModal({
         </Box>
 
         <FormGroup>
-          {activeMatieres.length > 0 ? (
-            activeMatieres.map((matiere) => (
-              <FormControlLabel
-                key={matiere.id}
-                control={
-                  <Checkbox
-                    checked={selectedMatieres.ids.includes(matiere.id)}
-                    onChange={() =>
-                      handleMatiereToggle(matiere.id, matiere.libelle_matiere)
-                    }
-                  />
-                }
-                label={
-                  <div className="flex gap-2 items-center">
-                    <span className="font-semibold dark:text-white">
-                      {matiere.libelle_matiere}
-                    </span>
-                    <span className="px-2 py-1 rounded-full text-xs bg-purple-200 text-purple-800 dark:bg-purple-900 dark:text-purple-300">
-                      Coef: {matiere.coef}
-                    </span>
-                    {matiere.enseignant && (
-                      <span className="px-2 py-1 rounded-full text-xs bg-green-200 text-green-800 dark:bg-green-900 dark:text-green-300">
-                        {matiere.enseignant}
+          {displayedMatieres.length > 0 ? (
+            displayedMatieres.map((matiere) => {
+              const isAlreadySelected = selectedMatieres.ids.includes(matiere.id);
+              const isAvailable = availableMatieres.some(m => m.id === matiere.id);
+
+              return (
+                <FormControlLabel
+                  key={matiere.id}
+                  control={
+                    <Checkbox
+                      checked={isAlreadySelected}
+                      onChange={() =>
+                        handleMatiereToggle(matiere.id, matiere.libelle_matiere)
+                      }
+                      disabled={!isAvailable && !isAlreadySelected} // ✅ DÉSACTIVER SI AFFECTÉE À UNE AUTRE CLASSE
+                    />
+                  }
+                  label={
+                    <div className="flex gap-2 items-center">
+                      <span className={`font-semibold ${!isAvailable && !isAlreadySelected ? "line-through text-gray-400 dark:text-gray-500" : "dark:text-white"}`}>
+                        {matiere.libelle_matiere}
                       </span>
-                    )}
-                  </div>
-                }
-              />
-            ))
+                      <span className="px-2 py-1 rounded-full text-xs bg-purple-200 text-purple-800 dark:bg-purple-900 dark:text-purple-300">
+                        Coef: {matiere.coef}
+                      </span>
+                      {matiere.enseignant && (
+                        <span className="px-2 py-1 rounded-full text-xs bg-green-200 text-green-800 dark:bg-green-900 dark:text-green-300">
+                          {matiere.enseignant}
+                        </span>
+                      )}
+                      {/* ✅ BADGE SI AFFECTÉE À AUTRE CLASSE */}
+                      {!isAvailable && !isAlreadySelected && (
+                        <span className="px-2 py-1 rounded-full text-xs bg-red-200 text-red-800 dark:bg-red-900 dark:text-red-300">
+                          Affectée ailleurs
+                        </span>
+                      )}
+                    </div>
+                  }
+                />
+              );
+            })
           ) : (
             <Typography className="text-gray-500 dark:text-gray-400">
               Aucune matière active disponible

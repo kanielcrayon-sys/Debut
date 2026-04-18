@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useMemo } from "react";
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Alert } from "@mui/material";
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Alert, Select, MenuItem, FormControl, InputLabel } from "@mui/material";
 import { Matiere, CreateMatiereInput, UpdateMatiereInput } from "@/app/src/interface/data";
 
 interface MatiereModalProps {
@@ -15,6 +15,7 @@ interface MatiereModalProps {
 const initialFormData: CreateMatiereInput = {
   libelle_matiere: "",
   coef: 1,
+  qualificatif: "Fondamentale", // ✅ DÉFAUT
 };
 
 function MatiereModal({
@@ -35,6 +36,7 @@ function MatiereModal({
         setFormData({
           libelle_matiere: matiere.libelle_matiere || "",
           coef: matiere.coef || 1,
+          qualificatif: matiere.qualificatif || "Fondamentale", // ✅ NOUVEAU
         });
       } else {
         setFormData(initialFormData);
@@ -56,6 +58,16 @@ function MatiereModal({
     setFormData((prev) => ({
       ...prev,
       coef: isNaN(value) ? 1 : value,
+    }));
+  };
+
+  // ✅ NOUVEAU: GÉRER CHANGEMENT QUALIFICATIF
+    // ✅ NOUVEAU: GÉRER CHANGEMENT QUALIFICATIF
+   // ✅ NOUVEAU: GÉRER CHANGEMENT QUALIFICATIF
+  const handleQualificatifChange = (value: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      qualificatif: value as "Fondamentale" | "Facultative",
     }));
   };
 
@@ -131,6 +143,21 @@ function MatiereModal({
             placeholder="Ex: 3"
             disabled={saving}
           />
+
+          {/* ✅ NOUVEAU: SELECT QUALIFICATIF */}
+                   <FormControl fullWidth>
+            <InputLabel>Qualificatif *</InputLabel>
+            <Select
+              value={formData.qualificatif || "Fondamentale"}
+              onChange={(e) => handleQualificatifChange(e.target.value)}
+              label="Qualificatif *"
+              size="small"
+              disabled={saving}
+            >
+              <MenuItem value="Fondamentale">Fondamentale</MenuItem>
+              <MenuItem value="Facultative">Facultative</MenuItem>
+            </Select>
+          </FormControl>
         </div>
       </DialogContent>
 

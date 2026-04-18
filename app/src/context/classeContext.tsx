@@ -66,16 +66,6 @@ export function ClasseProvider({ children }: { children: ReactNode }) {
         setClasses(classes.map(c => c.id === id ? updatedClasse : c));
         setError(null);
       }
-      
-      // 🆕 APRÈS UPDATE, RÉCUPÉRER LES DONNÉES FRAÎCHES DE FIRESTORE
-      console.log("🔄 Récupération des données fraîches...");
-      const freshClasse = await classeService.getById(id);
-      if (freshClasse) {
-        console.log("✅ Données fraîches récupérées:", freshClasse.nombre_eleve);
-        setClasses(classes.map(c => c.id === id ? freshClasse : c));
-        return freshClasse;
-      }
-      
       return updatedClasse || null;
     } catch (err) {
       console.error('❌ Erreur mise à jour classe:', err);

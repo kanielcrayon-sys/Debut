@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
     const docRef = await db.collection('matieres').add({
       ...data,
       statut_matiere: 'actif', // ✅ AJOUTE STATUT
+      qualificatif: data.qualificatif || 'Fondamentale', // ✅ DÉFAUT
       createdAt: new Date(),
     });
     
@@ -54,6 +55,7 @@ export async function POST(req: NextRequest) {
       id: docRef.id,
       ...data,
       statut_matiere: 'actif',
+       qualificatif: data.qualificatif || 'Fondamentale', //
     };
     
     console.log('✅ Matière créée');

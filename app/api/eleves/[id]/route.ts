@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/app/src/lib/firebase-admin';
-import { UpdateEleveInput } from '@/app/src/interface/data';
+import { UpdateEleveInput, Stat } from '@/app/src/interface/data';
 
+import { DocumentSnapshot } from 'firebase-admin/firestore';
+
+
+// 🔵 GET: Récupérer un élève par ID
 // 🔵 GET: Récupérer un élève par ID
 export async function GET(
   req: NextRequest,
@@ -20,16 +24,47 @@ export async function GET(
       );
     }
     
+    const eleveData = doc.data();
+    let stats: Stat[] = [];
     console.log('✅ Élève trouvé');
+    
+    // ✅ CHARGER LES STATS SI L'ÉLÈVE EN A
+if (eleveData?.stat && Array.isArray(eleveData.stat)) {
+  try {
+   const statPromises: Promise<FirebaseFirestore.DocumentSnapshot>[] = [];
+    
+    for (const stat of eleveData.stat) {
+      const statId = typeof stat === 'string' ? stat : stat.id;
+      if (statId) {
+        statPromises.push(db.collection('statistique').doc(statId).get());
+      }
+    }
+    
+    const statDocs = await Promise.all(statPromises);
+    stats = statDocs
+      .filter(doc => doc.exists)
+      .map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Stat[];
+    
+    console.log(`✅ ${stats.length} Stats chargés`);
+  } catch (statError) {
+    console.error('❌ Erreur chargement stats:', statError);
+    stats = [];
+  }
+}
+    
     return NextResponse.json({
       id: doc.id,
-      ...doc.data(),
+      ...eleveData,
+      stat: stats,
     });
     
   } catch (error) {
     console.error('❌ Erreur GET:', error);
     return NextResponse.json(
-      { error: 'Erreur lors de la récupération de l\'élève' },
+      { error: `Erreur: ${error instanceof Error ? error.message : 'Erreur inconnue'}` },
       { status: 500 }
     );
   }

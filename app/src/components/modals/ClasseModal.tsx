@@ -1,8 +1,15 @@
-"use client"
-import React, { useState, useMemo } from "react";
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Autocomplete } from "@mui/material";
-import { Classe, CreateClasseInput, UpdateClasseInput } from "@/app/src/interface/data";
-import { Professeur } from "@/app/src/interface/data";
+"use client";
+import React, { useMemo, useState } from "react";
+import {
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  TextField,
+  Autocomplete,
+} from "@mui/material";
+import { Classe, CreateClasseInput, UpdateClasseInput, Professeur } from "@/app/src/interface/data";
 import { useProfesseurs } from "@/app/src/context/professeurContext";
 import { useClasses } from "@/app/src/context/classeContext";
 
@@ -18,46 +25,58 @@ const initialFormData: CreateClasseInput = {
   libelle_classe: "",
   id_titulaire: "",
   scolarite: 250000,
+  id_classe_suivante: null,
+  classe_suivante_libelle: null,
 };
 
-export default function ClasseModal({
-  open,
-  onClose,
-  onSave,
-  classe,
-  isEditing = false,
-}: ClasseModalProps) {
+export default function ClasseModal({ open, onClose, onSave, classe, isEditing = false }: ClasseModalProps) {
   const { professeurs } = useProfesseurs();
   const { classes } = useClasses();
-  
+
+  // ✅ id stable pour éviter warnings React Compiler sur classe?.id
+  const currentClasseId = classe?.id ?? null;
+
   const [formData, setFormData] = useState<CreateClasseInput>(initialFormData);
   const [scolariteInputValue, setScolariteInputValue] = useState("250000");
 
   // ✅ FILTRER LES PROFESSEURS ACTIFS UNIQUEMENT
   const activeProfs = useMemo(() => {
-    return professeurs.filter(p => p.statut_enseignant === "actif");
+    return professeurs.filter((p) => p.statut_enseignant === "actif");
   }, [professeurs]);
 
   // ✅ FILTRER LES PROFESSEURS DISPONIBLES (pas déjà titulaires)
   const availableProfesseurs = useMemo(() => {
-    return activeProfs.filter(prof => {
-      // ✅ CHERCHER SI CE PROF EST TITULAIRE D'UNE AUTRE CLASSE ACTIVE
+    return activeProfs.filter((prof) => {
       const isTitulaireElsewhere = classes.some(
-        c => c.id_titulaire === prof.id && 
-             c.id !== classe?.id && // Sauf la classe actuelle (en édition)
-             (!c.statut_classe || c.statut_classe === "actif") // Seulement les classes actives
+        (c) =>
+          c.id_titulaire === prof.id &&
+          c.id !== currentClasseId && // Sauf la classe actuelle (en édition)
+          (!c.statut_classe || c.statut_classe === "actif") // Seulement les classes actives
       );
 
       return !isTitulaireElsewhere;
     });
-  }, [activeProfs, classes, classe?.id]);
+  }, [activeProfs, classes, currentClasseId]);
 
-  const defaultFormData = useMemo(() => {
+  // ✅ CLASSES DISPONIBLES COMME "CLASSE SUIVANTE"
+  // - seulement actives
+  // - pas soi-même
+  const availableNextClasses = useMemo(() => {
+    return classes.filter(
+      (c) =>
+        (!c.statut_classe || c.statut_classe === "actif") &&
+        (!currentClasseId || c.id !== currentClasseId)
+    );
+  }, [classes, currentClasseId]);
+
+  const defaultFormData = useMemo((): CreateClasseInput => {
     if (open && classe && isEditing) {
       return {
         libelle_classe: classe.libelle_classe || "",
         id_titulaire: classe.id_titulaire || "",
         scolarite: classe.scolarite || 250000,
+        id_classe_suivante: classe.id_classe_suivante ?? null,
+        classe_suivante_libelle: classe.classe_suivante_libelle ?? null,
       };
     }
     return initialFormData;
@@ -65,15 +84,13 @@ export default function ClasseModal({
 
   React.useEffect(() => {
     setFormData(defaultFormData);
-    setScolariteInputValue(
-      defaultFormData.scolarite ? defaultFormData.scolarite.toString() : "250000"
-    );
+    setScolariteInputValue(defaultFormData.scolarite ? defaultFormData.scolarite.toString() : "250000");
   }, [defaultFormData]);
 
   const scolaritePredefinies = [250000, 300000, 350000, 400000];
-  const scolariteOptions = Array.from(
-    new Set([...scolaritePredefinies, formData.scolarite || 250000])
-  ).sort((a, b) => a - b);
+  const scolariteOptions = Array.from(new Set([...scolaritePredefinies, formData.scolarite || 250000])).sort(
+    (a, b) => a - b
+  );
 
   const handleLibelleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData((prev) => ({
@@ -82,20 +99,14 @@ export default function ClasseModal({
     }));
   };
 
-  const handleTitulaireChange = (
-    event: React.SyntheticEvent,
-    value: Professeur | null
-  ) => {
+  const handleTitulaireChange = (event: React.SyntheticEvent, value: Professeur | null) => {
     setFormData((prev) => ({
       ...prev,
       id_titulaire: value?.id || "",
     }));
   };
 
-  const handleScolariteChange = (
-    event: React.SyntheticEvent,
-    value: number | string | null
-  ) => {
+  const handleScolariteChange = (event: React.SyntheticEvent, value: number | string | null) => {
     if (value !== null) {
       if (typeof value === "string") {
         const num = parseInt(value, 10);
@@ -116,10 +127,7 @@ export default function ClasseModal({
     }
   };
 
-  const handleScolariteInputChange = (
-    event: React.SyntheticEvent,
-    value: string
-  ) => {
+  const handleScolariteInputChange = (event: React.SyntheticEvent, value: string) => {
     setScolariteInputValue(value);
     const num = parseInt(value, 10);
     if (!isNaN(num)) {
@@ -130,9 +138,23 @@ export default function ClasseModal({
     }
   };
 
+  const handleClasseSuivanteChange = (event: React.SyntheticEvent, value: Classe | null) => {
+    setFormData((prev) => ({
+      ...prev,
+      id_classe_suivante: value?.id ?? null,
+      classe_suivante_libelle: value?.libelle_classe ?? null,
+    }));
+  };
+
   const handleSave = () => {
     if (!formData.libelle_classe || !formData.scolarite) {
       alert("Veuillez remplir tous les champs obligatoires (*)");
+      return;
+    }
+
+    // ✅ sécurité: pas de boucle directe
+    if (currentClasseId && formData.id_classe_suivante === currentClasseId) {
+      alert("La classe suivante ne peut pas être la même classe.");
       return;
     }
 
@@ -150,7 +172,12 @@ export default function ClasseModal({
 
   // ✅ UTILISE LES PROFESSEURS DISPONIBLES AU LIEU DE activeProfs
   const selectedProfesseur = formData.id_titulaire
-    ? availableProfesseurs.find((p) => p.id === formData.id_titulaire)
+    ? availableProfesseurs.find((p) => p.id === formData.id_titulaire) ?? null
+    : null;
+
+  // ✅ classe suivante sélectionnée
+  const selectedClasseSuivante = formData.id_classe_suivante
+    ? availableNextClasses.find((c) => c.id === formData.id_classe_suivante) ?? null
     : null;
 
   return (
@@ -172,24 +199,29 @@ export default function ClasseModal({
             className="mb-3"
           />
 
-          {/* ✅ UTILISE availableProfesseurs (avec filtre) AU LIEU DE activeProfs */}
           <Autocomplete
             options={availableProfesseurs}
-            getOptionLabel={(option) =>
-              `${option.identite.prenom_individu} ${option.identite.nom_individu}`
-            }
+            getOptionLabel={(option) => `${option.identite.prenom_individu} ${option.identite.nom_individu}`}
             isOptionEqualToValue={(option, value) => option.id === value?.id}
-            value={selectedProfesseur || null}
+            value={selectedProfesseur}
             onChange={handleTitulaireChange}
             clearOnBlur
             noOptionsText="Aucun professeur disponible (tous sont déjà titulaires)"
             renderInput={(params) => (
-              <TextField
-                {...params}
-                label="Professeur Titulaire (Optionnel)"
-                variant="outlined"
-                size="small"
-              />
+              <TextField {...params} label="Professeur Titulaire (Optionnel)" variant="outlined" size="small" />
+            )}
+          />
+
+          {/* ✅ Classe suivante (optionnel) */}
+          <Autocomplete
+            options={availableNextClasses}
+            getOptionLabel={(option) => option.libelle_classe}
+            isOptionEqualToValue={(option, value) => option.id === value?.id}
+            value={selectedClasseSuivante}
+            onChange={handleClasseSuivanteChange}
+            clearOnBlur
+            renderInput={(params) => (
+              <TextField {...params} label="Classe suivante (Optionnel)" variant="outlined" size="small" />
             )}
           />
 
@@ -200,17 +232,9 @@ export default function ClasseModal({
             onChange={handleScolariteChange}
             inputValue={scolariteInputValue || "250000"}
             onInputChange={handleScolariteInputChange}
-            getOptionLabel={(option) => 
-              typeof option === "number" ? option.toString() : option
-            }
+            getOptionLabel={(option) => (typeof option === "number" ? option.toString() : option)}
             renderInput={(params) => (
-              <TextField
-                {...params}
-                label="Scolarité (FCFA) *"
-                variant="outlined"
-                size="small"
-                type="number"
-              />
+              <TextField {...params} label="Scolarité (FCFA) *" variant="outlined" size="small" type="number" />
             )}
           />
         </div>

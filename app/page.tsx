@@ -1,17 +1,9 @@
 'use client';
 
-import LoginForm from "@/app/src/components/login/LoginformEx";
-
-export default function Home(){
-return(
-
-
-
-            <></>
-
-        
-  );
-  
+import { redirect } from "next/navigation";
+export default function Home() {
+  redirect("/login");
+  return null;
 }
 
 
