@@ -1,5 +1,4 @@
 "use client";
-
 import React, { useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import Paper from "@mui/material/Paper";
@@ -10,48 +9,57 @@ import Box from "@mui/material/Box";
 import { db } from "@/app/src/lib/firebase-client";
 import { collection, getDocs, query, where } from "firebase/firestore";
 
-// PERIODES/PERIODS à adapter à ta réalité:
+// Les PERIODES sont "hardcodées" car elles changent peu, tu peux les rendre dynamiques si besoin :
 const PERIODES = ["Trimestre 1", "Trimestre 2", "Trimestre 3", "Semestre 1", "Semestre 2"];
-const ANNEES = [2024, 2025, 2026]; // ou à générer dynamiquement
 
 type ResultatsStats = {
   classe: string;
   admis: number;
   echoue: number;
-
+  defaillant: number;
 };
+
 export default function ResultatsParClasseChart() {
-  const [annee, setAnnee] = useState(ANNEES[0]);
+  const [annees, setAnnees] = useState<number[]>([]);
+  const [annee, setAnnee] = useState<number | null>(null);
   const [periode, setPeriode] = useState(PERIODES[0]);
   const [data, setData] = useState<ResultatsStats[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Fetch all available years (dynamically)
+    async function fetchAnnees() {
+      const snap = await getDocs(collection(db, "resultats"));
+      const allAnnees = Array.from(
+        new Set(snap.docs.map(doc => doc.data().annee).filter((y) => typeof y === "number"))
+      ).sort((a, b) => b - a);
+      setAnnees(allAnnees);
+      if (allAnnees.length > 0 && (annee == null)) setAnnee(allAnnees[0]);
+    }
+    fetchAnnees();
+  }, []);
+
+  useEffect(() => {
     async function fetchResultats() {
+      if (!annee) return;
       setLoading(true);
-      // 🔵 Firestore : On filtre sur la période et l'année sélectionnées
       const resSnap = await getDocs(query(
         collection(db, "resultats"),
         where("annee", "==", annee),
         where("periode", "==", periode),
       ));
-
-      // Regrouper par classe, puis par statut
-      const counts: Record<string, {admis: number, echoue: number, defaillant: number}> = {};
+      const counts: Record<string, { admis: number, echoue: number, defaillant: number }> = {};
       resSnap.forEach(docSnap => {
         const d = docSnap.data();
         const classe = d.classe || "Classe inconnue";
-        const statut = d.statut; // "admis", "echoue", "defaillant"
-        if(!counts[classe]) counts[classe] = { admis:0, echoue:0, defaillant:0 };
+        const statut = d.statut;
+        if (!counts[classe]) counts[classe] = { admis: 0, echoue: 0, defaillant: 0 };
         if (statut === "admis") counts[classe].admis += 1;
         else if (statut === "echoue") counts[classe].echoue += 1;
         else counts[classe].defaillant += 1;
       });
-
-      // Passe sous forme tableau pour recharts
       const chartData = Object.entries(counts).map(([classe, counts]) => ({
-        classe,
-        ...counts,
+        classe, ...counts
       }));
       setData(chartData);
       setLoading(false);
@@ -63,14 +71,16 @@ export default function ResultatsParClasseChart() {
     <Paper className="p-6 mb-8" elevation={2}>
       <Box display="flex" gap={2} flexWrap="wrap" alignItems="center" mb={2}>
         <Typography variant="h6">Répartition admis/échoués par classe</Typography>
-        {/* Selecteurs année et période */}
-        <Select
-          size="small"
-          value={annee}
-          onChange={e => setAnnee(Number(e.target.value))}
-        >
-          {ANNEES.map(an => <MenuItem value={an} key={an}>{an}-{an+1}</MenuItem>)}
-        </Select>
+        {/* Sélecteurs dynamiques année/période */}
+        {annees.length > 0 && (
+          <Select
+            size="small"
+            value={annee ?? ""}
+            onChange={e => setAnnee(Number(e.target.value))}
+          >
+            {annees.map(an => <MenuItem value={an} key={an}>{an}-{an + 1}</MenuItem>)}
+          </Select>
+        )}
         <Select
           size="small"
           value={periode}

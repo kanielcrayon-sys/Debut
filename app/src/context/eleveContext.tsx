@@ -19,20 +19,10 @@ export const EleveContext = createContext<EleveContextType | undefined>(undefine
 
 // ✅ HELPER FUNCTION: TRANSFORMER LES DONNÉES (SANS any)
 // ✅ HELPER FUNCTION: S'ASSURER QUE TOUS LES CHAMPS SONT PRÉSENTS
-const transformEleveData = (data: CreateEleveInput | UpdateEleveInput): UpdateEleveInput => {
-  return {
-    identite: data.identite,
-    id_classe: data.id_classe,
-    classe: typeof data.classe === 'string' ? data.classe : "",
-    date_premier_inscription: data.date_premier_inscription,
-    en_regle: data.en_regle ?? false,
-    gbevou: data.gbevou ?? false,
-    statut_eleve: data.statut_eleve ?? "actif",
-    nom_tuteur: data.nom_tuteur,
-    profession_tuteur: data.profession_tuteur,
-    contact_tuteur: data.contact_tuteur,
-  };
-};
+const transformEleveData = (data: CreateEleveInput | UpdateEleveInput): CreateEleveInput | UpdateEleveInput => ({
+  ...data,
+  classe: typeof data.classe === 'string' ? data.classe : "",
+});
 
 export function EleveProvider({ children }: { children: ReactNode }) {
   const [eleves, setEleves] = useState<Eleve[]>([]);

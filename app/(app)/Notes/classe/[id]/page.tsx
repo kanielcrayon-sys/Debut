@@ -8,7 +8,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useParams } from "next/navigation";
 import { Matiere, Eleve } from "@/app/src/interface/data";
-
+import { db } from "@/app/src/lib/firebase-client";
+import { useSchoolInfo } from "@/app/src/context/schoolContext";
+import { collection, query, where, getDocs } from "firebase/firestore";
 interface ElevesResponse {
   data: Eleve[];
   pagination: {
@@ -39,9 +41,9 @@ export default function NotesClassePage() {
   const [eleveLoading, setEleveLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-
+const [effectifActif, setEffectifActif] = useState<number | null>(null);
   const selectedClasse = classes.find((c) => c.id === classeId);
-
+const { anneeScolaire } = useSchoolInfo();
   // ✅ FILTRER LES MATIÈRES ASSIGNÉES À CETTE CLASSE
   const classeMatieres = useMemo(() => {
     if (!selectedClasse?.id_matieres) return [];
@@ -53,54 +55,33 @@ export default function NotesClassePage() {
   }, [selectedClasse, matieres]);
 
   // ✅ CHARGER LES ÉLÈVES AVEC PAGINATION ET RECHERCHE
-  const loadEleves = async (page: number, search: string = "") => {
-    try {
-      setEleveLoading(true);
-      setError(null);
-      
-      const url = new URL('/api/notes/classe/search', window.location.origin);
-      url.searchParams.append('classeId', classeId);
-      url.searchParams.append('page', page.toString());
-      url.searchParams.append('limit', '10');
-      if (search) url.searchParams.append('search', search);
-      
-      const response = await fetch(url.toString());
-      
-      if (!response.ok) {
-        throw new Error('Erreur lors du chargement des élèves');
-      }
-      
-      const result: ElevesResponse = await response.json();
-      setEleves(result.data);
-      setCurrentPage(result.pagination.currentPage);
-      setTotalPages(result.pagination.totalPages);
-      setTotalCount(result.pagination.totalCount);
-      
-      console.log(`✅ ${result.data.length} élèves chargés`);
-    } catch (err) {
-      console.error('❌ Erreur chargement élèves:', err);
-      setError(err instanceof Error ? err.message : 'Erreur');
-    } finally {
-      setEleveLoading(false);
-    }
-  };
+
 
   // ✅ CHARGER LES ÉLÈVES AU MONTAGE
-  useEffect(() => {
-    if (classeId) {
-      loadEleves(1, searchQuery);
-    }
-  }, [classeId]);
-
-  // ✅ RECHERCHE AVEC DÉLAI
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadEleves(1, searchQuery);
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
+ 
 
   const loading = classesLoading || matieresLoading;
+  useEffect(() => {
+  async function fetchEffectif() {
+    if (!classeId || !anneeScolaire) {
+      setEffectifActif(0);
+      return;
+    }
+    try {
+      const q = query(
+        collection(db, "inscriptions"),
+        where("id_classe", "==", classeId),
+        where("annee_scolaire", "==", anneeScolaire),
+        where("statut", "==", "actif")
+      );
+      const snap = await getDocs(q);
+      setEffectifActif(snap.size);
+    } catch (err) {
+      setEffectifActif(0);
+    }
+  }
+  fetchEffectif();
+}, [classeId, anneeScolaire]);
 
   // ✅ SCROLL HORIZONTAL
   const scroll = (direction: "left" | "right") => {
@@ -148,7 +129,10 @@ export default function NotesClassePage() {
               {selectedClasse.libelle_classe}
             </h1>
             <p className="text-gray-500 dark:text-gray-400 mt-1">
-              {classeMatieres.length} matière(s) • {totalCount} élève(s)
+                            {classeMatieres.length} matière(s)
+                {effectifActif !== null &&
+                  <> • {effectifActif} élève(s)</>
+                }
             </p>
           </div>
         </div>
@@ -225,123 +209,7 @@ export default function NotesClassePage() {
       )}
 
       {/* ✅ TABLEAU ÉLÈVES AVEC PAGINATION ET RECHERCHE */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
-        {/* HEADER TABLEAU */}
-        <div className="bg-gray-200 dark:bg-gray-700 px-6 py-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-              Élèves ({totalCount})
-            </h2>
-            <TextField
-              placeholder="Rechercher un élève..."
-              size="small"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="!w-64"
-              variant="outlined"
-            />
-          </div>
-        </div>
-
-        {error && (
-          <div className="p-4 bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-300">
-            {error}
-          </div>
-        )}
-
-        {/* TABLEAU */}
-        {eleves.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead className="bg-gray-100 dark:bg-gray-700">
-                <tr>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">
-                    N°
-                  </th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">
-                    Nom & Prénom
-                  </th>
-                  <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">
-                    Sexe
-                  </th>
-                  <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">
-                    Date de Naissance
-                  </th>
-                  <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {eleves.map((eleve, index) => (
-                  <tr
-                    key={eleve.id}
-                    className="border-b border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition"
-                  >
-                    <td className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">
-                      {(currentPage - 1) * 10 + index + 1}
-                    </td>
-                    <td className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">
-                      {eleve.identite.nom_individu} {eleve.identite.prenom_individu}
-                    </td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
-                      {eleve.identite.sexe}
-                    </td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
-                      {eleve.identite.date_naissance
-                        ? new Date(eleve.identite.date_naissance).toLocaleDateString("fr-FR")
-                        : "N/A"}
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                      <Button
-                        variant="contained"
-                        size="small"
-                        className="!bg-blue-600"
-                        onClick={() =>
-                          router.push(
-                            `/Notes/classe/${classeId}/eleve/${eleve.id}`
-                          )
-                        }
-                      >
-                        Voir Notes
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-            {eleveLoading ? "Chargement..." : "Aucun élève trouvé"}
-          </div>
-        )}
-
-        {/* PAGINATION */}
-        {totalPages > 1 && (
-          <div className="flex justify-between items-center px-6 py-4 bg-gray-100 dark:bg-gray-700 border-t border-gray-300 dark:border-gray-600">
-            <Button
-              onClick={() => loadEleves(currentPage - 1, searchQuery)}
-              disabled={currentPage === 1 || eleveLoading}
-              variant="outlined"
-            >
-              ← Précédent
-            </Button>
-
-            <span className="text-sm font-semibold text-gray-900 dark:text-white">
-              Page {currentPage} / {totalPages}
-            </span>
-
-            <Button
-              onClick={() => loadEleves(currentPage + 1, searchQuery)}
-              disabled={currentPage === totalPages || eleveLoading}
-              variant="outlined"
-            >
-              Suivant →
-            </Button>
-          </div>
-        )}
-      </div>
+      
     </div>
   );
 }

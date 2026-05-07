@@ -19,16 +19,38 @@ import { useEleves } from "@/app/src/context/eleveContext";
 import { useClasses } from "@/app/src/context/classeContext";
 import { useSchoolInfo } from "@/app/src/context/schoolContext";
 import { useSyncEleveClasses } from "@/app/src/hooks/useSyncEleveClasses";
-import { collection, query, where, getDocs, orderBy } from "firebase/firestore";
+import { collection, query, where, getDocs, updateDoc, deleteDoc, doc } from "firebase/firestore";
 import { db } from "@/app/src/lib/firebase-client";
 import { useRoleGuard } from "@/app/src/hooks/useRoleGuard";
+import { anneeScolaireStartFromDate } from "@/app/src/lib/scolarite";
 
+type Inscription = {
+  id: string;
+  id_classe: string;
+  eleve_id: string;
+  statut: string;
+  annee_scolaire: number;
+  anciennete?: "nouveau" | "ancien";
+  date_suppression?: string;
+  // + autres si besoin
+};
+
+
+
+type EleveLigne = Eleve & {
+  id_inscription: string;
+  id_classe: string;
+  annee_scolaire?: number;
+};
 export default function EleveList() {
+
   const { loading: loadingRole } = useRoleGuard(["admin"]);
   const { eleves, loading, error, createEleve, updateEleve, deleteEleve, refreshEleves } = useEleves();
   const { classes } = useClasses();
   const { schoolInfo } = useSchoolInfo();
-
+  //
+  const [inscriptionsClasse, setInscriptionsClasse] = useState<Inscription[]>([]);
+  const [anneesDisponibles, setAnneesDisponibles] = useState<number[]>([]);
   // ✅ ÉTATS
   const [selectedClasseId, setSelectedClasseId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -37,8 +59,8 @@ export default function EleveList() {
   const [classesStats, setClassesStats] = useState<{ [key: string]: { total: number; boys: number; girls: number } }>(
     {}
   );
-  const [elevesList, setElevesList] = useState<Eleve[]>([]);
-  const [globalSearchResults, setGlobalSearchResults] = useState<Eleve[]>([]);
+  const [elevesList, setElevesList] = useState<EleveLigne[]>([]);
+  const [globalSearchResults, setGlobalSearchResults] = useState<EleveLigne[]>([]);
   const [pagination, setPagination] = useState({
     totalCount: 0,
     limit: 10,
@@ -62,92 +84,190 @@ export default function EleveList() {
   const [isEditing, setIsEditing] = useState(false);
   const [infoDialogOpen, setInfoDialogOpen] = useState(false);
   const [selectedEleveForInfo, setSelectedEleveForInfo] = useState<Eleve | null>(null);
-
+ const { anneeScolaire, setAnneeScolaire } = useSchoolInfo();
+const [trashedElevesClasse, setTrashedElevesClasse] = useState<EleveLigne[]>([]);
   const getCurrentAfterCursor = () => cursorStack[cursorStack.length - 1] ?? null;
 
   useSyncEleveClasses();
 
-  // ✅ CALCULER STATS CLASSES VIA FIREBASE
+  // ===== PATCH STATUT INSCRIPTIONS (temporaire !)
   useEffect(() => {
-    const calculateClassStats = async () => {
-      try {
-        const stats: { [key: string]: { total: number; boys: number; girls: number } } = {};
-
-        for (const classe of classes) {
-          const q = query(
-            collection(db, "eleves"),
-            where("id_classe", "==", classe.id),
-            where("statut_eleve", "==", "actif")
-          );
-
-          const snapshot = await getDocs(q);
-          const classEleves = snapshot.docs.map((doc) => doc.data()) as Eleve[];
-
-          stats[classe.id] = {
-            total: classEleves.length,
-            boys: classEleves.filter((e) => e.identite.sexe === "M").length,
-            girls: classEleves.filter((e) => e.identite.sexe === "F").length,
-          };
-        }
-
-        setClassesStats(stats);
-      } catch (error) {
-        console.error("Erreur calcul stats:", error);
+  if (!selectedClasseId || !anneeScolaire) {
+    setInscriptionsClasse([]);
+    return;
+  }
+  getDocs(query(
+    collection(db, "inscriptions"),
+    where("id_classe", "==", selectedClasseId),
+    where("annee_scolaire", "==", anneeScolaire)
+  )).then((snap) => {
+    setInscriptionsClasse(
+      snap.docs.map(d => ({ id: d.id, ...(d.data() as Omit<Inscription, "id">) }))
+    );
+  });
+}, [selectedClasseId, anneeScolaire]);
+ //trash
+ useEffect(() => {
+  if (!selectedClasseId) return;
+  const fetchTrashed = async () => {
+    const inscSnap = await getDocs(query(
+      collection(db, "inscriptions"),
+      where("annee_scolaire", "==", anneeScolaire),
+      where("id_classe", "==", selectedClasseId),
+      where("statut", "==", "abandonné")
+    ));
+    const eleveIds = inscSnap.docs.map(doc => doc.data().eleve_id);
+    let elevesArray: EleveLigne[] = [];
+    if (eleveIds.length > 0) {
+      for (let i = 0; i < eleveIds.length; i += 10) {
+        const chunk = eleveIds.slice(i, i + 10);
+        const snap = await getDocs(query(
+          collection(db, "eleves"),
+          where('__name__', 'in', chunk)
+        ));
+        elevesArray.push(...snap.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+        }) as EleveLigne));
       }
-    };
-
-    if (classes.length > 0) {
-      calculateClassStats();
     }
-  }, [classes]);
+    elevesArray = elevesArray.filter(eleve => eleve && eleve.identite && eleve.identite.nom_individu);
+    setTrashedElevesClasse(elevesArray);
+  };
+  fetchTrashed();
+}, [selectedClasseId, anneeScolaire, showTrash]); 
+
+  // ✅ CALCULER STATS CLASSES VIA FIREBASE
+// Remplace ton useEffect calcul stats classes par : // Vérifie le bon chemin
+
+const fetchClassStats = async () => {
+  try {
+    const inscSnap = await getDocs(query(
+      collection(db, "inscriptions"),
+      where("annee_scolaire", "==", anneeScolaire)
+    ));
+    const stats: Record<string, { total: number; boys: number; girls: number }> = {};
+    const eleveIdToClasse: Record<string, string> = {};
+
+    inscSnap.forEach(doc => {
+      const data = doc.data();
+      // NE GARDE QUE les actifs :
+      if (data.statut !== "actif") return;
+      // PATCH: toujours clé string.trim, pour match parfait avec classe.id
+      const classeKey = String(data.id_classe).trim();
+      if (!classeKey || !data.eleve_id) return;
+      if (!stats[classeKey]) stats[classeKey] = { total: 0, boys: 0, girls: 0 };
+      stats[classeKey].total += 1;
+      eleveIdToClasse[data.eleve_id] = classeKey;
+    });
+
+    const eleveIds = Object.keys(eleveIdToClasse);
+    const elevesData: Record<string, Eleve> = {};
+    if (eleveIds.length > 0) {
+      for (let i = 0; i < eleveIds.length; i += 10) {
+        const chunk = eleveIds.slice(i, i + 10);
+        const snap = await getDocs(query(
+          collection(db, "eleves"),
+          where('__name__', 'in', chunk)
+        ));
+        snap.forEach(d => {
+          elevesData[d.id] = { ...(d.data() as Eleve), id: d.id };
+        });
+      }
+      Object.entries(eleveIdToClasse).forEach(([eleveId, classeKey]) => {
+        const eleve = elevesData[eleveId];
+        if (!eleve) return;
+        if (eleve.identite?.sexe === "M") stats[classeKey].boys += 1;
+        if (eleve.identite?.sexe === "F") stats[classeKey].girls += 1;
+      });
+    }
+
+    setClassesStats(stats);
+
+    // DEBUG pour t’assurer que les clés sont alignées (supprime si inutile)
+    console.log("CLASSES KEYS:", classes.map(c => c.id));
+    console.log("STATS KEYS:", Object.keys(stats));
+    console.log("STATS OBJ:", stats);
+  } catch (e) {
+    console.error("Erreur calcul effectifs via inscriptions+eleves", e);
+  }
+};
+useEffect(() => {
+
+
+  fetchClassStats();
+}, [anneeScolaire]);
 
   // ✅ RECHERCHE GLOBALE FIREBASE
-  useEffect(() => {
-    const performGlobalSearch = async () => {
-      try {
-        if (globalSearchTerm.trim() === "") {
-          setGlobalSearchResults([]);
-          return;
-        }
+ useEffect(() => {
+  const performGlobalSearch = async () => {
+    try {
+      if (globalSearchTerm.trim() === "" || !anneeScolaire) {
+        setGlobalSearchResults([]);
+        return;
+      }
 
-        setLoadingGlobalSearch(true);
-        const q = query(collection(db, "eleves"), where("statut_eleve", "==", "actif"), orderBy("identite.nom_individu"));
+      setLoadingGlobalSearch(true);
 
-        const snapshot = await getDocs(q);
-        const results = snapshot.docs
-          .map((doc) => ({
+      // 1. Cherche toutes les inscriptions pour l'année courante
+      const inscSnap = await getDocs(query(
+        collection(db, "inscriptions"),
+        where("annee_scolaire", "==", anneeScolaire)
+      ));
+
+      const eleveIdsSet = new Set<string>();
+      inscSnap.forEach(doc => {
+        const data = doc.data();
+        if (data.eleve_id) eleveIdsSet.add(data.eleve_id as string);
+      });
+      const eleveIds = Array.from(eleveIdsSet);
+
+      // 2. Charge les élèves concernés, par chunk de 10 (Firestore limitation)
+      const allEleves: EleveLigne[] = [];
+      for (let i = 0; i < eleveIds.length; i += 10) {
+        const chunk = eleveIds.slice(i, i + 10);
+        const snap = await getDocs(query(
+          collection(db, "eleves"),
+          where('__name__', 'in', chunk)
+        ));
+        allEleves.push(
+          ...snap.docs.map(doc => ({
             id: doc.id,
             ...doc.data(),
-          })) as Eleve[];
-
-        const filtered = results.filter((eleve) =>
-          `${eleve.identite.nom_individu} ${eleve.identite.prenom_individu}`.toLowerCase().includes(globalSearchTerm.toLowerCase())
+          }) as EleveLigne)
         );
-
-        setGlobalSearchResults(filtered);
-      } catch (error) {
-        console.error("Erreur recherche globale:", error);
-        setGlobalSearchResults([]);
-      } finally {
-        setLoadingGlobalSearch(false);
       }
-    };
 
-    performGlobalSearch();
-  }, [globalSearchTerm]);
+      // 3. Filtre prénom/nom (ignore la casse, contient)
+      const filtered = allEleves.filter((eleve) =>
+        `${eleve.identite?.nom_individu || ''} ${eleve.identite?.prenom_individu || ''}`.toLowerCase().includes(globalSearchTerm.toLowerCase())
+      );
+
+      setGlobalSearchResults(filtered);
+
+    } catch (error) {
+      console.error("Erreur recherche globale filtrée année:", error);
+      setGlobalSearchResults([]);
+    } finally {
+      setLoadingGlobalSearch(false);
+    }
+  };
+
+  performGlobalSearch();
+}, [globalSearchTerm, anneeScolaire]);
 
   // ✅ CHARGER ÉLÈVES CLASSE (API cursor + search)
   const loadClassEleves = async (classeId: string, after: string | null = null, search: string = "") => {
     try {
       setLoadingEleves(true);
       setErrorState(null);
-
+console.log("[DEBUG] loadClassEleves appelée pour classeId =", classeId);
       const url = new URL(`/api/eleves/classe/${classeId}`, window.location.origin);
       url.searchParams.set("limit", "10");
       if (after) url.searchParams.set("after", after);
       const normalizedSearch = search.trim().toUpperCase();
       if (normalizedSearch) url.searchParams.set("search", normalizedSearch);
-
+url.searchParams.set("annee_scolaire", String(anneeScolaire));
       const response = await fetch(url.toString());
      if (!response.ok) {
   const text = await response.text().catch(() => "");
@@ -155,6 +275,7 @@ export default function EleveList() {
 }
 
       const data = await response.json();
+      console.log("[DEBUG] data.data reçu après fetch =", data.data);
 
       setElevesList(data.data || []);
       setClassStats(data.stats);
@@ -190,7 +311,30 @@ export default function EleveList() {
 
     return () => clearTimeout(timer);
   }, [classSearchTerm, selectedClasseId]);
+//
 
+    useEffect(() => {
+      const fetchAnnees = async () => {
+        try {
+          const snap = await getDocs(collection(db, "inscriptions"));
+          const anneesSet = new Set<number>();
+          snap.forEach(doc => {
+            const data = doc.data();
+            if (typeof data.annee_scolaire === "number") {
+              anneesSet.add(data.annee_scolaire);
+            }
+          });
+          // Trie du plus récent au plus ancien
+          const anneesSorted = Array.from(anneesSet).sort((a, b) => b - a);
+          setAnneesDisponibles(anneesSorted);
+          // Positionne l’année sélectionnée à la plus récente si besoin
+          if (anneesSorted.length > 0) setAnneeScolaire(anneesSorted[0]);
+        } catch (e) {
+          console.error("Erreur chargement années Firestore :", e);
+        }
+      };
+      fetchAnnees();
+    }, []);
   //userRoleGuard
   if (loadingRole) {
     return (
@@ -268,121 +412,162 @@ export default function EleveList() {
   };
 
   // ✅ SAUVEGARDER ÉLÈVE
-  const handleSaveEleve = async (data: CreateEleveInput | UpdateEleveInput) => {
+// Adapte ce chemin si besoin
+// adapte le chemin si besoin
+// adapte chemin si besoin
+
+const handleSaveEleve = async (data: CreateEleveInput | UpdateEleveInput) => {
+  try {
+    setErrorState(null);
+    let newData = data;
+
+    if (!isEditing) {
+      // Calcule l'année scolaire
+      const anneeScolaire = anneeScolaireStartFromDate(new Date());
+      newData = { ...data, annee_scolaire: anneeScolaire };
+      // CRÉATION dans le back (élève + inscription)
+      console.log("🚀 Payload CRÉATION envoyé à l'API:", newData);
+      await createEleve(newData as CreateEleveInput & { annee_scolaire: number });
+        await fetchClassStats();
+      // 🔥 Correction : on recharge directement la classe (côté API moderne)
+      if (selectedClasseId) {
+        // Tu peux attendre 400ms si Firestore est lent à la propager
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        await loadClassEleves(selectedClasseId, null, "");
+      }
+    }else if (isEditing && selectedEleve) {
+  // Utilise toujours la variable locale actuelle !
+        const dataAvecAnnee = { ...data, annee_scolaire: anneeScolaire };
+
+        console.log("✏️ Payload ÉDITION envoyé à l'API:", dataAvecAnnee, selectedEleve.id);
+
+        await updateEleve(
+          selectedEleve.id,
+          dataAvecAnnee as UpdateEleveInput & { annee_scolaire: number }
+        );
+
+        if (selectedClasseId) {
+          await loadClassEleves(selectedClasseId, getCurrentAfterCursor(), classSearchTerm);
+        }
+      }
+    setModalOpen(false);
+  } catch (err) {
+    console.error("❌ Erreur sauvegarde élève:", err);
+    setErrorState(err instanceof Error ? err.message : "Erreur lors de la sauvegarde");
+  }
+};
+
+  // ✅ SUPPRIMER ÉLÈVE
+ const handleDeleteEleve = async (id: string) => {
+  if (confirm("Êtes-vous sûr de vouloir abandonner cet élève pour l'année scolaire affichée ?")) {
     try {
       setErrorState(null);
-      if (isEditing && selectedEleve) {
-        await updateEleve(selectedEleve.id, data as UpdateEleveInput);
+      // Marque la fiche élève comme abandonné pour indication globale
+      await updateEleve(id, {
+        // ...garde tous tes champs ici
+        statut_eleve: "abandonné",
+        date_suppression: new Date().toISOString().split("T")[0],
+      } as UpdateEleveInput);
+
+      // Mets à jour l'inscription de L'ÉLÈVE pour L'ANNÉE COURANTE
+      const q = query(
+        collection(db, "inscriptions"),
+        where("annee_scolaire", "==", anneeScolaire),
+        where("eleve_id", "==", id)
+      );
+      const snap = await getDocs(q);
+      for (const inscDoc of snap.docs) {
+        await updateDoc(inscDoc.ref, {
+          statut: "abandonné",
+          date_suppression: new Date().toISOString().split("T")[0],
+        });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await fetchClassStats(); 
+      if (selectedClasseId) {
+        await loadClassEleves(selectedClasseId, getCurrentAfterCursor(), classSearchTerm);
       } else {
-        await createEleve(data as CreateEleveInput);
+        await refreshEleves();
+      }
+    } catch (err) {
+      console.error("❌ Erreur suppression élève:", err);
+      setErrorState(err instanceof Error ? err.message : "Erreur lors de la suppression");
+    }
+  }
+};
+
+  // ✅ RESTAURER ÉLÈVE
+ const handleRestoreEleve = async (id: string) => {
+  if (confirm("Êtes-vous sûr de vouloir restaurer cet élève pour l'année scolaire affichée ?")) {
+    try {
+      setErrorState(null);
+
+      await updateEleve(id, {
+        // ... tes champs ici
+        statut_eleve: "actif",
+        date_suppression: "",
+      } as UpdateEleveInput);
+
+      // Mets à jour l'inscription de L'ÉLÈVE pour L'ANNÉE COURANTE
+      const q = query(
+        collection(db, "inscriptions"),
+        where("annee_scolaire", "==", anneeScolaire),
+        where("eleve_id", "==", id)
+      );
+      const snap = await getDocs(q);
+      for (const inscDoc of snap.docs) {
+        await updateDoc(inscDoc.ref, {
+          statut: "actif",
+          date_suppression: "",
+        });
       }
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
       await refreshEleves();
-
+      await fetchClassStats();
       if (selectedClasseId) {
         await loadClassEleves(selectedClasseId, getCurrentAfterCursor(), classSearchTerm);
       }
 
-      setModalOpen(false);
+      setShowTrash(false);
     } catch (err) {
-      console.error("❌ Erreur sauvegarde élève:", err);
-      setErrorState(err instanceof Error ? err.message : "Erreur lors de la sauvegarde");
+      console.error("❌ Erreur restauration élève:", err);
+      setErrorState(err instanceof Error ? err.message : "Erreur lors de la restauration");
     }
-  };
-
-  // ✅ SUPPRIMER ÉLÈVE
-  const handleDeleteEleve = async (id: string) => {
-    if (confirm("Êtes-vous sûr de vouloir abandonner cet élève?")) {
-      try {
-        setErrorState(null);
-        const eleve = eleves.find((e) => e.id === id);
-        if (eleve) {
-          await updateEleve(id, {
-            identite: eleve.identite,
-            id_classe: eleve.id_classe,
-            classe: eleve.classe,
-            date_premier_inscription: eleve.date_premier_inscription,
-            en_regle: eleve.en_regle,
-            gbevou: eleve.gbevou,
-            statut_eleve: "abandonné",
-            nom_tuteur: eleve.nom_tuteur,
-            profession_tuteur: eleve.profession_tuteur,
-            contact_tuteur: eleve.contact_tuteur,
-            date_suppression: new Date().toISOString().split("T")[0],
-          } as UpdateEleveInput);
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-
-        if (selectedClasseId) {
-          await loadClassEleves(selectedClasseId, getCurrentAfterCursor(), classSearchTerm);
-        } else {
-          await refreshEleves();
-        }
-      } catch (err) {
-        console.error("❌ Erreur suppression élève:", err);
-        setErrorState(err instanceof Error ? err.message : "Erreur lors de la suppression");
-      }
-    }
-  };
-
-  // ✅ RESTAURER ÉLÈVE
-  const handleRestoreEleve = async (id: string) => {
-    if (confirm("Êtes-vous sûr de vouloir restaurer cet élève?")) {
-      try {
-        setErrorState(null);
-        const eleve = eleves.find((e) => e.id === id);
-        if (eleve) {
-          await updateEleve(id, {
-            identite: eleve.identite,
-            id_classe: eleve.id_classe,
-            classe: eleve.classe,
-            date_premier_inscription: eleve.date_premier_inscription,
-            en_regle: eleve.en_regle,
-            gbevou: eleve.gbevou,
-            statut_eleve: "actif",
-            nom_tuteur: eleve.nom_tuteur,
-            profession_tuteur: eleve.profession_tuteur,
-            contact_tuteur: eleve.contact_tuteur,
-            date_suppression: "",
-          } as UpdateEleveInput);
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        await refreshEleves();
-
-        if (selectedClasseId) {
-          await loadClassEleves(selectedClasseId, getCurrentAfterCursor(), classSearchTerm);
-        }
-
-        setShowTrash(false);
-      } catch (err) {
-        console.error("❌ Erreur restauration élève:", err);
-        setErrorState(err instanceof Error ? err.message : "Erreur lors de la restauration");
-      }
-    }
-  };
+  }
+};
 
   // ✅ SUPPRIMER DÉFINITIVEMENT
-  const handlePermanentDelete = async (id: string) => {
-    if (confirm("Êtes-vous sûr de vouloir supprimer définitivement cet élève? Cette action est irréversible!")) {
-      try {
-        setErrorState(null);
-        await deleteEleve(id);
+const handlePermanentDelete = async (id: string) => {
+  if (confirm("Êtes-vous sûr de vouloir supprimer définitivement cet élève de toutes les années ? Cette action est irréversible!")) {
+    try {
+      setErrorState(null);
 
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        await refreshEleves();
-
-        if (selectedClasseId) {
-          await loadClassEleves(selectedClasseId, getCurrentAfterCursor(), classSearchTerm);
-        }
-      } catch (err) {
-        console.error("❌ Erreur suppression définitive:", err);
-        setErrorState(err instanceof Error ? err.message : "Erreur lors de la suppression définitive");
+      // 1. Supprime toutes les inscriptions de l'élève (toutes années)
+      const snap = await getDocs(query(
+        collection(db, "inscriptions"),
+        where("eleve_id", "==", id)
+      ));
+      for (const inscDoc of snap.docs) {
+        await deleteDoc(inscDoc.ref);
       }
+
+      // 2. Supprime la fiche élève elle-même
+      await deleteEleve(id);
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await refreshEleves();
+      await fetchClassStats();
+      if (selectedClasseId) {
+        await loadClassEleves(selectedClasseId, getCurrentAfterCursor(), classSearchTerm);
+      }
+    } catch (err) {
+      console.error("❌ Erreur suppression définitive:", err);
+      setErrorState(err instanceof Error ? err.message : "Erreur lors de la suppression définitive");
     }
-  };
+  }
+};
 
   // ✅ GÉNÉRER PDF LISTE DE CLASSE
   const generateClassListPDF = async (classNamePDF: string) => {
@@ -452,20 +637,39 @@ export default function EleveList() {
               <th style="border: 1px solid #000; padding: 8px; text-align: center; width: 60px; font-weight: bold; font-size: 13px;">Observations</th>
             </tr>
           </thead>
-          <tbody>
+         <tbody>
             ${pageEleves
               .map(
                 (eleve, index) => `
-              <tr>
-                <td style="border: 1px solid #000; padding: 7px; text-align: center; font-size: 13px;">${startIdx + index + 1}</td>
-                <td style="border: 1px solid #000; padding: 7px; font-weight: bold; font-size: 13px;"><strong>${eleve.identite.nom_individu} ${eleve.identite.prenom_individu}</strong></td>
-                <td style="border: 1px solid #000; padding: 7px; text-align: center; font-size: 13px;">${eleve.identite.sexe === "M" ? "M" : "F"}</td>
-                <td style="border: 1px solid #000; padding: 7px; text-align: center; font-size: 13px;">${calculateAge(
-                  eleve.identite.date_naissance
-                )}</td>
-                <td style="border: 1px solid #000; padding: 7px; height: 40px; font-size: 13px;"></td>
-              </tr>
-            `
+                  <tr>
+                    <td style="border: 1px solid #000; padding: 7px; text-align: center; font-size: 13px;">
+                      ${startIdx + index + 1}
+                    </td>
+                    <td style="border: 1px solid #000; padding: 7px; font-weight: bold; font-size: 13px;">
+                      <strong>
+                        ${eleve.identite?.nom_individu || "N/A"} ${eleve.identite?.prenom_individu || ""}
+                      </strong>
+                    </td>
+                    <td style="border: 1px solid #000; padding: 7px; text-align: center; font-size: 13px;">
+                      ${
+                        eleve.identite?.sexe === "M" 
+                          ? "M" 
+                          : eleve.identite?.sexe === "F"
+                            ? "F"
+                            : "?"
+                      }
+                    </td>
+                    <td style="border: 1px solid #000; padding: 7px; text-align: center; font-size: 13px;">
+                      ${
+                        eleve.identite?.date_naissance 
+                          ? calculateAge(eleve.identite.date_naissance)
+                          : "?"
+                      }
+                    </td>
+                    <td style="border: 1px solid #000; padding: 7px; height: 40px; font-size: 13px;">
+                    </td>
+                  </tr>
+                `
               )
               .join("")}
           </tbody>
@@ -561,19 +765,31 @@ export default function EleveList() {
             ${pageEleves
               .map(
                 (eleve, index) => `
-              <tr>
-                <td style="border: 1px solid #000; padding: 6px; text-align: center; font-size: 12px;">${startIdx + index + 1}</td>
-                <td style="border: 1px solid #000; padding: 6px; font-weight: bold; font-size: 12px;"><strong>${eleve.identite.nom_individu} ${eleve.identite.prenom_individu}</strong></td>
-                <td style="border: 1px solid #000; padding: 6px; text-align: center; font-size: 12px;">${eleve.identite.sexe === "M" ? "M" : "F"}</td>
-                <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
-                <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
-                <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
-                <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
-                <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
-                <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
-                <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
-              </tr>
-            `
+                <tr>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center; font-size: 12px;">
+                    ${startIdx + index + 1}
+                  </td>
+                  <td style="border: 1px solid #000; padding: 6px; font-weight: bold; font-size: 12px;">
+                    <strong>${eleve.identite?.nom_individu || "N/A"} ${eleve.identite?.prenom_individu || ""}</strong>
+                  </td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center; font-size: 12px;">
+                    ${
+                      eleve.identite?.sexe === "M"
+                        ? "M"
+                        : eleve.identite?.sexe === "F"
+                          ? "F"
+                          : "?"
+                    }
+                  </td>
+                  <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
+                  <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
+                  <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
+                  <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
+                  <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
+                  <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
+                  <td style="border: 1px solid #000; padding: 6px; height: 30px; font-size: 12px;"></td>
+                </tr>
+                `
               )
               .join("")}
           </tbody>
@@ -648,8 +864,12 @@ export default function EleveList() {
   // ========== VUE 1: LISTE CLASSES ==========
   if (!selectedClasseId) {
     const trashedEleves = eleves.filter((e) => e.statut_eleve === "abandonné" || e.statut_eleve === "suspendu");
-    const activeClassesWithStats = classes.filter((c) => classesStats[c.id]?.total > 0);
-
+ const allClassesWithStats = classes.map((classe) => ({
+  ...classe,
+  stats: classesStats[String(classe.id).trim()] || { total: 0, boys: 0, girls: 0 }
+}));
+console.log("CLASSES 🚦", classes);
+console.log("CLASSES STATS 🚦", classesStats);
     return (
       <div className="w-full p-6">
         <div className="flex justify-between items-center mb-6">
@@ -671,7 +891,28 @@ export default function EleveList() {
             </Button>
           </div>
         </div>
-
+      {/*selecteur */} 
+        <div style={{ marginBottom: 24 }}>
+          <label>Année scolaire : </label>
+          <select
+            value={anneeScolaire}
+            onChange={e => setAnneeScolaire(Number(e.target.value))}
+            style={{
+              marginLeft: 8,
+              padding: 6,
+              borderRadius: 4,
+              border: '1px solid #ccc',
+              minWidth: 130,
+            }}
+            disabled={anneesDisponibles.length === 0}
+          >
+            {anneesDisponibles.map(annee => (
+              <option key={annee} value={annee}>
+                {annee}-{annee + 1}
+              </option>
+            ))}
+          </select>
+        </div>
         {/* Recherche globale */}
         <div className="mb-6">
           <input
@@ -713,13 +954,19 @@ export default function EleveList() {
                         return (
                           <tr key={eleve.id} className="border-b border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition">
                             <td className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">
-                              {eleve.identite.nom_individu} {eleve.identite.prenom_individu}
+                              {eleve.identite?.nom_individu || <i className="text-sm text-red-500">[incomplet]</i>} {eleve.identite?.prenom_individu || ""}
                             </td>
                             <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
                               <span className="px-3 py-1 rounded-full bg-indigo-200 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300">{classe?.libelle_classe}</span>
                             </td>
                             <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
-                              <span className="px-3 py-1 rounded-full bg-blue-200 text-blue-800 dark:bg-blue-900 dark:text-blue-300">{eleve.identite.sexe === "M" ? "M" : "F"}</span>
+                              <span className="px-3 py-1 rounded-full bg-blue-200 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                                  {eleve.identite?.sexe === "M"
+                                    ? "M"
+                                    : eleve.identite?.sexe === "F"
+                                      ? "F"
+                                      : "?"}
+                                </span>
                             </td>
                             <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
                               <span
@@ -757,46 +1004,59 @@ export default function EleveList() {
         {/* Cartes classes */}
         <div className="overflow-x-auto pb-4">
           <div className="flex gap-4 min-w-min">
-            {activeClassesWithStats.map((classe) => {
-              const stats = classesStats[classe.id];
-              return (
-                <div
-                  key={classe.id}
-                  onClick={async () => {
-                    setClassSearchTerm("");
-                    setCursorStack([null]);
-                    setCurrentPage(1);
-                    await loadClassEleves(classe.id, null, "");
-                  }}
-                  className="flex-shrink-0 w-56 p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg cursor-pointer transition transform hover:scale-105"
-                >
-                  <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-3">{classe.libelle_classe}</h3>
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-600 dark:text-gray-400">Effectif:</span>
-                      <span className="font-bold text-lg text-blue-600 dark:text-blue-400">{stats.total}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-600 dark:text-gray-400">👦 Garçons:</span>
-                      <span className="font-semibold text-blue-600 dark:text-blue-400">{stats.boys}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-600 dark:text-gray-400">👩 Filles:</span>
-                      <span className="font-semibold text-pink-600 dark:text-pink-400">{stats.girls}</span>
-                    </div>
-                  </div>
-                  <div className="mt-4 pt-4 border-t border-gray-300 dark:border-gray-600">
-                    <p className="text-sm text-gray-500 dark:text-gray-400 text-center">Cliquez pour voir les détails</p>
-                  </div>
-                </div>
-              );
-            })}
+            
+            {allClassesWithStats.map((classe) => {
+  const stats = classe.stats;
+  console.log(
+  "------ CLASSES LIST ------",
+  classes.map(c => `${c.libelle_classe} : "${String(c.id)}"`)
+);
+console.log(
+  "------ KEYS classesStats ------",
+  Object.keys(classesStats)
+);
+console.log(
+  "------ OBJ classesStats ------", 
+  classesStats
+);
+  return (
+    <div
+      key={classe.id}
+      onClick={async () => {
+        setClassSearchTerm("");
+        setCursorStack([null]);
+        setCurrentPage(1);
+        await loadClassEleves(classe.id, null, "");
+      }}
+      className="flex-shrink-0 w-56 p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg cursor-pointer transition transform hover:scale-105"
+    >
+      <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-3">{classe.libelle_classe}</h3>
+      <div className="space-y-2">
+        <div className="flex justify-between items-center">
+          <span className="text-gray-600 dark:text-gray-400">Effectif:</span>
+          <span className="font-bold text-lg text-blue-600 dark:text-blue-400">{stats.total}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-gray-600 dark:text-gray-400">👦 Garçons:</span>
+          <span className="font-semibold text-blue-600 dark:text-blue-400">{stats.boys}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-gray-600 dark:text-gray-400">👩 Filles:</span>
+          <span className="font-semibold text-pink-600 dark:text-pink-400">{stats.girls}</span>
+        </div>
+      </div>
+      <div className="mt-4 pt-4 border-t border-gray-300 dark:border-gray-600">
+        <p className="text-sm text-gray-500 dark:text-gray-400 text-center">Cliquez pour voir les détails</p>
+      </div>
+    </div>
+  );
+})}
           </div>
         </div>
 
-        {activeClassesWithStats.length === 0 && globalSearchTerm.trim() === "" && (
-          <div className="text-center py-12 text-gray-500 dark:text-gray-400">Aucune classe avec élèves</div>
-        )}
+        {allClassesWithStats.length === 0 && globalSearchTerm.trim() === "" && (
+  <div className="text-center py-12 text-gray-500 dark:text-gray-400">Aucune classe trouvée</div>
+)}
 
         <EleveModal open={modalOpen} onClose={() => setModalOpen(false)} onSave={handleSaveEleve} eleve={selectedEleve} isEditing={isEditing} classes={classes} />
 
@@ -824,13 +1084,19 @@ export default function EleveList() {
                     return (
                       <tr key={eleve.id} className="border-b border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition">
                         <td className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">
-                          {eleve.identite.nom_individu} {eleve.identite.prenom_individu}
+                          {eleve.identite?.nom_individu || <i className="text-sm text-red-500">[incomplet]</i>} {eleve.identite?.prenom_individu || ""}
                         </td>
                         <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
                           <span className="px-3 py-1 rounded-full bg-indigo-200 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300">{classe?.libelle_classe}</span>
                         </td>
                         <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
-                          <span className="px-3 py-1 rounded-full bg-blue-200 text-blue-800 dark:bg-blue-900 dark:text-blue-300">{eleve.identite.sexe === "M" ? "M" : "F"}</span>
+                         <span className="px-3 py-1 rounded-full bg-blue-200 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                                  {eleve.identite?.sexe === "M"
+                                    ? "M"
+                                    : eleve.identite?.sexe === "F"
+                                      ? "F"
+                                      : "?"}
+                                </span>
                         </td>
                         <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
                           <span
@@ -933,9 +1199,7 @@ export default function EleveList() {
   const selectedClasse = classes.find((c) => c.id === selectedClasseId);
 
   // Liste des élèves abandonnés/suspendus pour cette classe
-const trashedElevesClasse = eleves.filter(
-  (e) => e.id_classe === selectedClasseId && (e.statut_eleve === "abandonné" || e.statut_eleve === "suspendu")
-);
+
 
   return (
     <div className="w-full p-6">
@@ -1015,7 +1279,7 @@ const trashedElevesClasse = eleves.filter(
                   {trashedElevesClasse.map((eleve) => (
                     <tr key={eleve.id} className="border-b border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition">
                       <td className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">
-                        {eleve.identite.nom_individu} {eleve.identite.prenom_individu}
+                        {eleve.identite?.nom_individu || <i className="text-sm text-red-500">[incomplet]</i>} {eleve.identite?.prenom_individu || ""}
                       </td>
                       <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
                         <span className={`px-3 py-1 rounded-full ${
@@ -1057,33 +1321,69 @@ const trashedElevesClasse = eleves.filter(
       ) : (
         // ---- TABLEAU ÉLÈVES ACTIFS ----
         <>
+        {console.log("state elevesList front =", elevesList)}
           <div className="overflow-x-auto shadow-md rounded-lg mb-6">
             <table className="w-full border-collapse bg-white dark:bg-gray-800">
             <thead className="bg-gray-200 dark:bg-gray-700">
                     <tr>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">N° - Nom & Prénom</th>
                       <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">Sexe</th>
+                      <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">Ancienneté</th>
                       <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">Statut</th>
                       <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">En Règle</th>
                       
                       <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">Actions</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {elevesList.map((eleve, index) => (
-                      <tr key={eleve.id} className="border-b border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+                 <tbody>
+                  {elevesList.map((eleve, index) => {
+                    // Lookup de l'inscription pour trouver l'ancienneté
+                    const inscription = inscriptionsClasse.find(insc => insc.eleve_id === eleve.id);
+                    const anciennete = inscription?.anciennete ?? "—";
+                    return (
+                      <tr
+                        key={eleve.id}
+                        className="border-b border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition"
+                      >
                         <td className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">
                           <span className="inline-block mr-3 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-300 rounded-full w-6 h-6 text-center font-bold text-xs leading-6">
                             {(currentPage - 1) * 10 + index + 1}
                           </span>
-                          {eleve.identite.nom_individu} {eleve.identite.prenom_individu}
+                          {eleve.identite?.nom_individu || <i className="text-sm text-red-500">[incomplet]</i>} {eleve.identite?.prenom_individu || ""}
                         </td>
                         <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
-                          <span className="px-3 py-1 rounded-full bg-blue-200 text-blue-800 dark:bg-blue-900 dark:text-blue-300">{eleve.identite.sexe === "M" ? "M" : "F"}</span>
+                          <span className="px-3 py-1 rounded-full bg-blue-200 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                            {eleve.identite?.sexe === "M"
+                              ? "M"
+                              : eleve.identite?.sexe === "F"
+                                ? "F"
+                                : "?"}
+                          </span>
                         </td>
-                         <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
-                          <span className="px-3 py-1 rounded-full bg-green-200 text-blue-800 dark:bg-blue-900 dark:text-blue-300">{eleve.statut_eleve}</span>
+                        <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
+                          <span className="px-3 py-1 rounded-full bg-green-200 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                            {eleve.statut_eleve}
+                          </span>
                         </td>
+
+                        {/* ===== COLONNE ANCIENNETE ===== */}
+                        <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
+                          <span className={
+                            anciennete === "nouveau"
+                              ? "px-3 py-1 rounded-full bg-blue-200 text-blue-800 dark:bg-blue-900 dark:text-blue-300"
+                              : anciennete === "ancien"
+                                ? "px-3 py-1 rounded-full bg-green-200 text-green-800 dark:bg-green-900 dark:text-green-300"
+                                : "px-3 py-1 rounded-full bg-gray-100 text-gray-600 dark:bg-gray-900 dark:text-gray-300"
+                          }>
+                            {anciennete === "nouveau"
+                              ? "Nouveau"
+                              : anciennete === "ancien"
+                                ? "Ancien"
+                                : "—"}
+                          </span>
+                        </td>
+                        {/* ===== FIN COLONNE ANCIENNETE ===== */}
+
                         <td className="px-6 py-4 text-center text-sm text-gray-900 dark:text-white">
                           <span
                             className={`px-3 py-1 rounded-full ${
@@ -1107,8 +1407,9 @@ const trashedElevesClasse = eleves.filter(
                           </IconButton>
                         </td>
                       </tr>
-                    ))}
-                  </tbody>
+                    );
+                  })}
+                </tbody>
             </table>
           </div>
           <div className="flex justify-center items-center gap-4 mb-6">

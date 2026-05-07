@@ -13,12 +13,77 @@ import { collection, query, where, getDocs, orderBy } from "firebase/firestore";
 import { db } from "@/app/src/lib/firebase-client";
 import { useRoleGuard } from "@/app/src/hooks/useRoleGuard";
 
-interface ClasseWithStats extends Classe {
-  nombre_abandons: number;
-}
+  type Inscription = {
+    id: string;
+    id_classe: string;
+    statut: string;
+    annee_scolaire?: number;
+  };
+  interface ClasseWithStats extends Classe {
+    nombre_abandons: number;
+  }
 
 export default function ClasseList() {
-  
+        const [anneesDisponibles, setAnneesDisponibles] = useState<number[]>([]);
+        const [anneeSelectionnee, setAnneeSelectionnee] = useState<number | null>(null);
+
+            useEffect(() => {
+        getDocs(collection(db, "inscriptions")).then((snap) => {
+          const anneesSet = new Set<number>();
+          snap.forEach((doc) => {
+            const data = doc.data() as Inscription;
+            const v = data.annee_scolaire;
+            if (typeof v === "number" && Number.isFinite(v)) anneesSet.add(v);
+          });
+          const annees = Array.from(anneesSet).sort((a, b) => b - a);
+          setAnneesDisponibles(annees);
+          if (annees.length && anneeSelectionnee == null) setAnneeSelectionnee(annees[0]);
+        });
+      }, []);
+        const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
+      const [anneeScolaireActive, setAnneeScolaireActive] = useState<number | null>(null);
+
+      // Charge l’année scolaire active une seule fois (optionnel mais recommandé)
+      useEffect(() => {
+        // Si tu as déjà une API/variable pour l’année active, récupère-la là !
+        // Ici, exemple brut :
+        fetch("/api/settings/scolarite")
+          .then((r) => r.json())
+          .then((data) => {
+            setAnneeScolaireActive(data?.data?.annee_scolaire_active ?? null);
+          })
+          .catch(() => setAnneeScolaireActive(null));
+      }, []);
+  useEffect(() => {
+    if (anneeSelectionnee == null) return;
+    getDocs(query(
+      collection(db, "inscriptions"),
+      where("statut", "in", ["actif", "abandonné"]),
+      where("annee_scolaire", "==", anneeSelectionnee)
+    )).then((snap) => {
+            setInscriptions(
+        snap.docs
+          .map((d) => {
+            const data = d.data() as Partial<Inscription>;
+            return {
+              id: d.id,
+              id_classe: data.id_classe ?? "", // ou signale erreur si manquant
+              statut: data.statut ?? "",
+              annee_scolaire: data.annee_scolaire,
+              // ... autres champs si besoin
+            };
+          })
+          // On ne garde QUE les inscriptions complètes (optionnel mais safe)
+          .filter((insc) => insc.id_classe && insc.statut)
+      );
+    });
+  }, [anneeSelectionnee]);
+      // Charge les inscriptions "actif" de l'année active
+     
+
+      //selecteur
+      
+
   const { classes, loading, createClasse, updateClasse, deleteClasse, refreshClasses } = useClasses();
   const { eleves } = useEleves();
   const { professeurs } = useProfesseurs();
@@ -32,30 +97,33 @@ export default function ClasseList() {
   const [errorState, setErrorState] = useState<string | null>(null);
   const [filteredClasses, setFilteredClasses] = useState<ClasseWithStats[]>([]);
  const { loading: loadingRole } = useRoleGuard(["admin"]);
-  // ✅ CLASSES ACTIVES
+  // CLASSES ACTIVES
   const activeClasses = useMemo(() => {
     return classes.filter((c) => !c.statut_classe || c.statut_classe === "actif");
   }, [classes]);
 
-  // ✅ CLASSES ABANDONNÉES (CORBEILLE)
+  // CLASSES ABANDONNÉES (CORBEILLE)
   const trashedClasses = useMemo(() => {
     return classes.filter((c) => c.statut_classe === "abandonné" || c.statut_classe === "suspendu");
   }, [classes]);
 
   const displayedClasses = showTrash ? trashedClasses : activeClasses;
 
-  // ✅ STATS AVEC LES ÉLÈVES
-  const classesWithStats: ClasseWithStats[] = useMemo(() => {
-    return displayedClasses.map((classe) => {
-      const abandons = eleves.filter((e) => e.id_classe === classe.id && e.statut_eleve === "abandonné");
+  // STATS AVEC LES ÉLÈVES
+          const classesWithStats: ClasseWithStats[] = useMemo(() => {
+          return displayedClasses.map((classe) => {
+            // ici uniquement les inscriptions "actif"
+            const effectif = inscriptions.filter(i => i.id_classe === classe.id).length;
+            // Si tu gères les abandons dans inscriptions:
+            const abandons = inscriptions.filter(i => i.id_classe === classe.id && i.statut === "abandonné").length;
 
-      return {
-        ...classe,
-        nombre_eleve: classe.nombre_eleve || 0,
-        nombre_abandons: abandons.length,
-      };
-    });
-  }, [displayedClasses, eleves]);
+            return {
+              ...classe,
+              nombre_eleve: effectif,
+              nombre_abandons: abandons,
+            };
+          });
+        }, [displayedClasses, inscriptions]);
 
   // ✅ DÉCLENCHER LA RECHERCHE QUAND searchTerm CHANGE
   useEffect(() => {
@@ -357,6 +425,18 @@ export default function ClasseList() {
           <p className="text-gray-500 dark:text-gray-400 mt-1">
             {showTrash ? `Corbeille: ${trashedClasses.length}` : `Total: ${activeClasses.length}`} classe(s)
           </p>
+        </div>
+        <div className="flex gap-2 items-center">
+          <span>Année scolaire :</span>
+          <select
+            value={anneeSelectionnee ?? ""}
+            onChange={e => setAnneeSelectionnee(Number(e.target.value))}
+            className="border px-2 py-1 rounded"
+          >
+            {anneesDisponibles.map(y => (
+              <option key={y} value={y}>{`${y} - ${y + 1}`}</option>
+            ))}
+          </select>
         </div>
 
         <div className="flex gap-2">

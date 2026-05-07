@@ -28,11 +28,18 @@ export async function POST(req: NextRequest) {
       matiereId?: string;
       libelle_stat?: StatType;
       newRepartition?: Repartition;
+      annee_scolaire?: number; // <- nouvel argument obligatoire
     };
 
-    const { classeId, matiereId, libelle_stat, newRepartition } = body;
+    const { classeId, matiereId, libelle_stat, newRepartition, annee_scolaire } = body;
 
-    if (!classeId || !matiereId || !libelle_stat || !newRepartition) {
+    if (
+      !classeId ||
+      !matiereId ||
+      !libelle_stat ||
+      !newRepartition ||
+      typeof annee_scolaire !== "number"
+    ) {
       return NextResponse.json({ error: "Paramètres invalides" }, { status: 400 });
     }
 
@@ -44,12 +51,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 1) Trouver stats existants
+    // 1) Trouver stats existants pour cette classe/matière/stat/ANNEE SCOLAIRE
     const snap = await db
       .collection("statistique")
       .where("id_classe", "==", classeId)
       .where("id_matiere", "==", matiereId)
       .where("libelle_stat", "==", libelle_stat)
+      .where("annee_scolaire", "==", annee_scolaire)
       .get();
 
     if (snap.empty) {
@@ -71,20 +79,38 @@ export async function POST(req: NextRequest) {
       updated += chunk.length;
     }
 
-    // 3) MAJ eleves.stat (si utilisé)
-    const elevesSnap = await db.collection("eleves").where("id_classe", "==", classeId).get();
-    for (const e of elevesSnap.docs) {
-      const data = e.data() as EleveDoc | undefined;
-      const statArr = Array.isArray(data?.stat) ? data!.stat! : [];
+    // 3) MAJ eleves.stat mais UNIQUEMENT sur les élèves actifs dans la classe pour l'année
+    const inscriptionsSnap = await db
+      .collection("inscriptions")
+      .where("id_classe", "==", classeId)
+      .where("annee_scolaire", "==", annee_scolaire)
+      .where("statut", "==", "actif")
+      .get();
 
-      const mapped = statArr.map((s) => {
-        if (s.libelle_stat === libelle_stat && s.id_matiere === matiereId) {
-          return { ...s, repartition: newRepartition };
-        }
-        return s;
-      });
+    const eleveIds = inscriptionsSnap.docs
+      .map((d) => d.data().eleve_id)
+      .filter((id): id is string => typeof id === "string");
 
-      await e.ref.update({ stat: mapped });
+    // Firestore limitation: 10 par requête "in"
+    for (let i = 0; i < eleveIds.length; i += 10) {
+      const chunk = eleveIds.slice(i, i + 10);
+      if (chunk.length === 0) continue;
+
+      const elevesSnap = await db.collection("eleves").where("__name__", "in", chunk).get();
+
+      for (const e of elevesSnap.docs) {
+        const data = e.data() as EleveDoc | undefined;
+        const statArr = Array.isArray(data?.stat) ? data!.stat! : [];
+
+        const mapped = statArr.map((s) => {
+          if (s.libelle_stat === libelle_stat && s.id_matiere === matiereId) {
+            return { ...s, repartition: newRepartition };
+          }
+          return s;
+        });
+
+        await e.ref.update({ stat: mapped });
+      }
     }
 
     return NextResponse.json({ success: true, updated, newRepartition });

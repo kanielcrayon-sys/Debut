@@ -41,6 +41,7 @@ export interface CreateEleveInput {
   nom_tuteur: string;
   profession_tuteur: string;
   contact_tuteur: string;
+   annee_scolaire?: number;
 }
 
 // ✅ PAS DE Partial! TOUS LES CHAMPS OBLIGATOIRES COMME CreateEleveInput

@@ -17,7 +17,6 @@ type EleveDoc = {
   stat?: EleveStatEntry[];
 };
 
-// (optionnel) validation cohérence stat/repartition
 const allowedRepartitionsFor = (libelle: StatType): Repartition[] => {
   if (libelle === "Stat1") return ["Trimestre1", "Semestre1"];
   if (libelle === "Stat2") return ["Trimestre2", "Semestre2"];
@@ -26,10 +25,11 @@ const allowedRepartitionsFor = (libelle: StatType): Repartition[] => {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { classeId?: string; matiereId?: string };
-    const { classeId, matiereId } = body;
+    // Prend l'année scolaire du corps de la requête
+    const body = (await req.json()) as { classeId?: string; matiereId?: string; annee_scolaire?: number };
+    const { classeId, matiereId, annee_scolaire } = body;
 
-    if (!classeId || !matiereId) {
+    if (!classeId || !matiereId || typeof annee_scolaire !== "number") {
       return NextResponse.json({ error: "Paramètres invalides" }, { status: 400 });
     }
 
@@ -44,11 +44,12 @@ export async function POST(req: NextRequest) {
     const classeData = classeDoc.data();
     const matiereData = matiereDoc.data();
 
-    // 1) Tous les stats existants pour cette matière/classe
+    // 1) Tous les stats existants pour cette matière/classe/année scolaire
     const existingStatsSnap = await db
       .collection("statistique")
       .where("id_classe", "==", classeId)
       .where("id_matiere", "==", matiereId)
+      .where("annee_scolaire", "==", annee_scolaire)
       .get();
 
     // 2) Quelles "sessions" existent déjà ? (Stat1_Trimestre1, Stat2_Semestre2, etc.)
@@ -56,7 +57,6 @@ export async function POST(req: NextRequest) {
     existingStatsSnap.forEach((d) => {
       const s = d.data() as Partial<{ libelle_stat: StatType; repartition: Repartition }>;
       if (!s.libelle_stat || !s.repartition) return;
-      // garde seulement les cohérents selon ta logique
       if (!allowedRepartitionsFor(s.libelle_stat).includes(s.repartition)) return;
       existingKeys.add(`${s.libelle_stat}_${s.repartition}`);
     });
@@ -69,14 +69,17 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 3) Eleves actifs de la classe
-    const elevesSnap = await db
-      .collection("eleves")
+    // 3) Eleves inscrits actifs pour cette classe/année
+    const inscriptionsSnap = await db
+      .collection("inscriptions")
       .where("id_classe", "==", classeId)
-      .where("statut_eleve", "==", "actif")
+      .where("annee_scolaire", "==", annee_scolaire)
+      .where("statut", "==", "actif")
       .get();
 
-    const eleveIds = elevesSnap.docs.map((d) => d.id);
+    const eleveIds = inscriptionsSnap.docs
+      .map((d) => d.data().eleve_id)
+      .filter((id): id is string => typeof id === "string");
 
     // 4) Index : quels (eleveId + key) existent déjà ?
     const existingByEleve = new Set<string>(); // `${eleveId}|${key}`
@@ -111,7 +114,7 @@ export async function POST(req: NextRequest) {
       const chunk = toCreate.slice(i, i + 350);
       const batch = db.batch();
 
-      // pour update eleves.stat après commit
+      // Pour update eleves.stat après commit
       const newEntriesByEleve: Record<string, EleveStatEntry[]> = {};
 
       for (const item of chunk) {
@@ -131,6 +134,7 @@ export async function POST(req: NextRequest) {
           mois: now.getMonth() + 1,
           annee: now.getFullYear(),
           date: now.toISOString().split("T")[0],
+          annee_scolaire, // <-- AJOUT ici pour cohérence !
           notes: [],
           cloture: false,
           createdAt: now.toISOString(),

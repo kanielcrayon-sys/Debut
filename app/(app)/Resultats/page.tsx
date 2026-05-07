@@ -301,46 +301,58 @@ const [totalEchoues, setTotalEchoues] = useState(0);
     return anneeSelected !== anneeScolaireActive;
   }, [anneeSelected, anneeScolaireActive]);
 
-  const fetchCardsStats = useCallback(async () => {
-    try {
-      setLoadingCardsStats(true);
-      const out: Record<string, { effectif: number; admis: number; echoues: number; titulaire: string }> = {};
+    const fetchCardsStats = useCallback(async () => {
+      try {
+        setLoadingCardsStats(true);
+        const out: Record<string, { effectif: number; admis: number; echoues: number; titulaire: string }> = {};
 
-      for (const c of activeClasses) {
-        const elevesSnap = await getDocs(
-          query(collection(db, "eleves"), where("id_classe", "==", c.id), where("statut_eleve", "==", "actif"))
-        );
-        const effectif = elevesSnap.size;
+        for (const c of activeClasses) {
+          // PATCH: Ici on compte les effectifs à partir des INSCRIPTIONS et non des eleves
+          let effectif = 0;
+          if (anneeSelected) {
+            const inscSnap = await getDocs(
+              query(
+                collection(db, "inscriptions"),
+                where("id_classe", "==", c.id),
+                where("annee_scolaire", "==", anneeSelected),
+                where("statut", "==", "actif")
+              )
+            );
+            effectif = inscSnap.size;
+          } else {
+            // Sécurité : si pas d'année sélectionnée, on affiche 0
+            effectif = 0;
+          }
 
-        const constraints: QueryConstraint[] = [
-          where("id_classe", "==", c.id),
-          where("libelle_stat", "==", finalSection.statType),
-          where("repartition", "==", finalSection.repartition),
-        ];
-        if (anneeSelected) constraints.push(where("annee_scolaire", "==", anneeSelected));
+          const constraints: QueryConstraint[] = [
+            where("id_classe", "==", c.id),
+            where("libelle_stat", "==", finalSection.statType),
+            where("repartition", "==", finalSection.repartition),
+          ];
+          if (anneeSelected) constraints.push(where("annee_scolaire", "==", anneeSelected));
 
-        const bSnap = await getDocs(query(collection(db, "bulletins"), ...constraints));
+          const bSnap = await getDocs(query(collection(db, "bulletins"), ...constraints));
 
-        let admis = 0;
-        let echoues = 0;
+          let admis = 0;
+          let echoues = 0;
 
-        bSnap.forEach((d) => {
-          const b = d.data() as Partial<Bulletin>;
-          if (b.verdict === "Échoué") echoues += 1;
-          else if (b.verdict === "Admis" || b.verdict === "Admis par décision") admis += 1;
-        });
+          bSnap.forEach((d) => {
+            const b = d.data() as Partial<Bulletin>;
+            if (b.verdict === "Échoué") echoues += 1;
+            else if (b.verdict === "Admis" || b.verdict === "Admis par décision") admis += 1;
+          });
 
-        out[c.id] = { effectif, admis, echoues, titulaire: c.titulaire_classe ?? "" };
+          out[c.id] = { effectif, admis, echoues, titulaire: c.titulaire_classe ?? "" };
+        }
+
+        setCardsStats(out);
+      } catch (e) {
+        console.error(e);
+        setCardsStats({});
+      } finally {
+        setLoadingCardsStats(false);
       }
-
-      setCardsStats(out);
-    } catch (e) {
-      console.error(e);
-      setCardsStats({});
-    } finally {
-      setLoadingCardsStats(false);
-    }
-  }, [activeClasses, finalSection, anneeSelected]);
+    }, [activeClasses, finalSection, anneeSelected]);
 
   useEffect(() => {
     fetchCardsStats();
@@ -943,20 +955,20 @@ const [totalEchoues, setTotalEchoues] = useState(0);
                 </div>
               </div>
              <div className="px-4 py-2 flex justify-end">
-                {(!echouesState.loading && totalEchoues > 0 && echouesState.items.length === totalEchoues) ? (
+                {(!admisState.loading && totalAdmis > 0 && admisState.items.length === totalAdmis) ? (
                   <Button
                     variant="contained"
-                    color="error"
+                    color="primary"
                     onClick={() => handleExportPdf(
-                      echouesTableRef,
-                      `Echoues_${selectedClasse?.libelle_classe ?? ""}_${anneeSelected ? formatAnneeScolaire(anneeSelected) : ""}_${activeSection.label}.pdf`
+                      admisTableRef,
+                      `Admis_${selectedClasse?.libelle_classe ?? ""}_${anneeSelected ? formatAnneeScolaire(anneeSelected) : ""}_${activeSection.label}.pdf`
                     )}
                   >
-                    Imprimer PDF Échoués
+                    Imprimer PDF Admis
                   </Button>
                 ) : (
-                  <Button variant="contained" color="error" disabled>
-                    {echouesState.loading || totalEchoues === 0 ? "Chargement PDF..." : "PDF indisponible"}
+                  <Button variant="contained" color="primary" disabled>
+                    {admisState.loading || totalAdmis === 0 ? "Chargement PDF..." : "PDF indisponible"}
                   </Button>
                 )}
               </div>

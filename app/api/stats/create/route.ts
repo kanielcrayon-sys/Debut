@@ -88,20 +88,22 @@ export async function POST(req: NextRequest) {
     const classeData = classeDoc.data();
     const matiereData = matiereDoc.data();
 
-    // 2) Récupérer TOUS les élèves actifs de la classe
-    const elevesSnap = await db
-      .collection("eleves")
+    // 2) Récupérer TOUS les élèves ACTIFS selon "inscriptions" + année scolaire
+    const inscriptionsSnap = await db
+      .collection("inscriptions")
       .where("id_classe", "==", classeId)
-      .where("statut_eleve", "==", "actif")
+      .where("annee_scolaire", "==", annee_scolaire)
+      .where("statut", "==", "actif")
       .get();
 
-    if (elevesSnap.empty) {
-      return NextResponse.json({ success: false, message: "Aucun élève actif trouvé", created: 0 }, { status: 200 });
+    if (inscriptionsSnap.empty) {
+      return NextResponse.json({ success: false, message: "Aucun élève actif trouvé pour cette année/scolaire", created: 0 }, { status: 200 });
     }
+    const eleveIds = inscriptionsSnap.docs
+      .map((d) => d.data().eleve_id)
+      .filter((id): id is string => typeof id === "string");
 
-    const eleveIds = elevesSnap.docs.map((d) => d.id);
-
-    // 3) Éviter les doublons (✅ filtré aussi par année)
+    // 3) Éviter les doublons (déjà filtrés par année scolaire)
     const existingStatsSnap = await db
       .collection("statistique")
       .where("id_classe", "==", classeId)
@@ -114,7 +116,7 @@ export async function POST(req: NextRequest) {
     existingStatsSnap.forEach((d) => {
       const s = d.data() as Partial<{ id_eleve: string; repartition: Repartition }>;
       if (!s.id_eleve) return;
-      // si tu veux être strict et éviter doublon par repartition aussi, décommente:
+      // Si tu veux éviter le doublon par repartition aussi, décommente:
       // if (s.repartition !== repartition) return;
       alreadyHasStat.add(s.id_eleve);
     });

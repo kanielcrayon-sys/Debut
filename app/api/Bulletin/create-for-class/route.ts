@@ -159,14 +159,15 @@ const recomputeMoyenneGeneraleClasse = async (params: {
 }) => {
   const { id_classe, classe_libelle, libelle_stat, repartition, annee_scolaire } = params;
 
-  const elevesSnap = await db
-    .collection("eleves")
-    .where("id_classe", "==", id_classe)
-    .where("statut_eleve", "==", "actif")
-    .get();
+    const inscSnap = await db
+      .collection("inscriptions")
+      .where("id_classe", "==", id_classe)
+      .where("annee_scolaire", "==", annee_scolaire)
+      .where("statut", "==", "actif")
+      .get();
 
-  const effectif = elevesSnap.size;
-  if (!effectif) return { ok: false as const, reason: "Aucun élève actif" };
+    const effectif = inscSnap.size;
+    if (!effectif) return { ok: false as const, reason: "Aucun élève actif pour cette année" };
 
   const bSnap = await db
     .collection("bulletins")
@@ -265,18 +266,28 @@ export async function POST(req: NextRequest) {
 
     const matiereInfoById = await loadMatieresInfoById(classe);
 
-    const elevesSnap = await db
-      .collection("eleves")
-      .where("id_classe", "==", id_classe)
-      .where("statut_eleve", "==", "actif")
-      .get();
+   // ⬇️ 1. On récupère bien la liste des élèves “officiellement inscrits ET actifs” à la classe et année
+      const inscSnap = await db
+        .collection("inscriptions")
+        .where("id_classe", "==", id_classe)
+        .where("annee_scolaire", "==", annee_scolaire)
+        .where("statut", "==", "actif")
+        .get();
 
-    const eleves = elevesSnap.docs.map((d) => ({
-      id: d.id,
-      ...(d.data() as Omit<Eleve, "id">),
-    })) as Eleve[];
+      const eleveIds = inscSnap.docs.map((d) => d.data().eleve_id).filter(Boolean);
 
-    if (eleves.length === 0) return NextResponse.json({ error: "Aucun élève actif trouvé" }, { status: 404 });
+      // ⬇️ 2. On récupère leurs profils Eleve
+      const eleveDocs = await Promise.all(
+        eleveIds.map((id) => db.collection("eleves").doc(id).get())
+      );
+      const eleves = eleveDocs
+        .filter((doc) => doc.exists)
+        .map((doc) => ({
+          id: doc.id,
+          ...(doc.data() as Omit<Eleve, "id">),
+        })) as Eleve[];
+
+      if (eleves.length === 0) return NextResponse.json({ error: "Aucun élève actif trouvé pour cette année/classe" }, { status: 404 });
 
     // ✅ stats filtrées par année
     const statsSnap = await db

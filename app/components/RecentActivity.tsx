@@ -1,5 +1,4 @@
 "use client";
-
 import React, { useEffect, useState } from "react";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
@@ -12,77 +11,72 @@ import SchoolIcon from "@mui/icons-material/School";
 import NoteAltIcon from "@mui/icons-material/NoteAlt";
 import Divider from "@mui/material/Divider";
 import { db } from "@/app/src/lib/firebase-client";
-import { collection, query, orderBy, limit, getDocs } from "firebase/firestore";
+import { collection, query, orderBy, limit, getDocs, where } from "firebase/firestore";
 
-// Tu peux ajuster le type des actions selon tes besoins
 interface ActivityItem {
   id: string;
-  type: "eleve" | "prof" | "note" | "classe";
+  type: string;
   title: string;
   subtitle: string;
   date: Date;
 }
 
-function getIcon(type: ActivityItem['type']) {
-  switch(type) {
-    case "eleve": return <PersonIcon />;
-    case "prof": return <SchoolIcon />;
-    case "note": return <NoteAltIcon />;
-    case "classe": return <SchoolIcon />;
-    default: return <PersonIcon />;
-  }
+function getIcon(type: string) {
+  if (type === "eleve") return <PersonIcon />;
+  if (type === "prof") return <SchoolIcon />;
+  if (type === "note") return <NoteAltIcon />;
+  if (type === "abandon") return <PersonIcon color="error" />;
+  return <PersonIcon />;
 }
 
-export default function RecentActivity() {
+export default function RecentActivity({ annee, classesMap }: { annee: number, classesMap: { [id: string]: string } }) {
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function fetchActivities() {
-      // Simule trois types d'actions, à remplacer par le fetch Firestore réel :
-      const recentEleves = await getDocs(query(collection(db, "eleves"), orderBy("createdAt", "desc"), limit(3)));
-      const recentProfs = await getDocs(query(collection(db, "professeurs"), orderBy("createdAt", "desc"), limit(2)));
-      // Ajoute d'autres fetch si tu veux (notes, classes, ...)
+      // Ex : les 3 dernières inscriptions actives et abandons de l'année
+      const inscriptionsSnap = await getDocs(
+        query(
+          collection(db, "inscriptions"),
+          where("annee_scolaire", "==", annee),
+          orderBy("date_suppression", "desc"),
+          limit(5)
+        )
+      );
       const items: ActivityItem[] = [];
-
-      recentEleves.forEach(docSnap => {
+      inscriptionsSnap.forEach(docSnap => {
         const d = docSnap.data();
-        items.push({
-          id: docSnap.id,
-          type: "eleve",
-          title: `Nouvel élève : ${d.nom ?? ""} ${d.prenom ?? ""}`,
-          subtitle: d.classe ? `Classe : ${d.classe}` : "",
-          date: d.createdAt ? d.createdAt.toDate?.() ?? new Date(d.createdAt.seconds * 1000) : new Date(), // adapte si Firestore Timestamp ou string
-        });
+        // Ajoute selon statut
+       if (d.statut === "abandonné") {
+          items.push({
+            id: docSnap.id,
+            type: "abandon",
+            title: `nouveau Abandon`,
+            subtitle: `Classe ${classesMap?.[d.id_classe] ?? d.id_classe} — Le ${d.date_suppression ?? "?"}`,
+            date: d.date_suppression ? new Date(d.date_suppression) : new Date(),
+          });
+        }
+        else if (d.statut === "actif") {
+          items.push({
+            id: docSnap.id,
+            type: "eleve",
+            title: `Nouvelle inscription`,
+            subtitle: `Classe ${classesMap?.[d.id_classe] ?? d.id_classe}`,
+            date: d.date_inscription ? new Date(d.date_inscription) : new Date(),
+          });
+        }
       });
-
-      recentProfs.forEach(docSnap => {
-        const d = docSnap.data();
-        items.push({
-          id: docSnap.id,
-          type: "prof",
-          title: `Nouveau professeur : ${d.nom ?? ""} ${d.prenom ?? ""}`,
-          subtitle: d.matiere ? `Matière : ${d.matiere}` : "",
-          date: d.createdAt ? d.createdAt.toDate?.() ?? new Date(d.createdAt.seconds * 1000) : new Date(),
-        });
-      });
-
-      // Trie toutes les activités les plus récentes en premier
+      // Trie par date descendante
       items.sort((a, b) => b.date.getTime() - a.date.getTime());
-
-      setActivities(items.slice(0, 5)); // Limite à 5 plus récentes
+      setActivities(items.slice(0, 5));
       setLoading(false);
     }
     fetchActivities();
-  }, []);
+  }, [annee]);
 
-  if (loading) {
-    return <Typography>Chargement de l’historique…</Typography>;
-  }
-
-  if (activities.length === 0) {
-    return <Typography>Aucune action récente.</Typography>
-  }
+  if (loading) return <Typography>Chargement de l’historique…</Typography>;
+  if (activities.length === 0) return <Typography>Aucune action récente.</Typography>;
 
   return (
     <div>

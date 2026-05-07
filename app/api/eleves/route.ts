@@ -6,9 +6,7 @@ import { Eleve, CreateEleveInput } from '@/app/src/interface/data';
 export async function GET() {
   try {
     console.log('📖 Récupération des élèves...');
-    
     const snapshot = await db.collection('eleves').get();
-    
     const eleves: Eleve[] = [];
     snapshot.forEach((doc) => {
       eleves.push({
@@ -16,10 +14,8 @@ export async function GET() {
         ...doc.data(),
       } as Eleve);
     });
-    
     console.log(`✅ ${eleves.length} élève(s) trouvé(s)`);
     return NextResponse.json(eleves);
-    
   } catch (error) {
     console.error('❌ Erreur GET:', error);
     return NextResponse.json(
@@ -29,72 +25,53 @@ export async function GET() {
   }
 }
 
-// 🟢 POST: Créer un nouvel élève
+// 🟢 POST: Créer un nouvel élève + inscription
 export async function POST(req: NextRequest) {
   try {
     console.log('📝 Création d\'un nouvel élève...');
     
-    const data: CreateEleveInput = await req.json();
+    const data = await req.json();
     console.log('📥 Données reçues:', JSON.stringify(data, null, 2));
     
-    // ✅ VALIDATION COMPLÈTE - TOUS LES CHAMPS OBLIGATOIRES
-    if (!data.identite?.nom_individu) {
-      console.error('❌ Nom manquant');
-      return NextResponse.json(
-        { error: 'Nom obligatoire' },
-        { status: 400 }
-      );
+    // ✅ VALIDATION CHAMP À CHAMP POUR DEBUG
+    if (!data.identite) {
+      console.log("❌ Champ identite manquant");
+      return NextResponse.json({ error: 'Champ identite manquant' }, { status: 400 });
     }
-
-    if (!data.identite?.prenom_individu) {
-      console.error('❌ Prénom manquant');
-      return NextResponse.json(
-        { error: 'Prénom obligatoire' },
-        { status: 400 }
-      );
+    if (!data.identite.nom_individu) {
+      console.log("❌ Nom manquant");
+      return NextResponse.json({ error: 'Nom obligatoire' }, { status: 400 });
     }
-
-    if (!data.identite?.date_naissance) {
-      console.error('❌ Date de naissance manquante');
-      return NextResponse.json(
-        { error: 'Date de naissance obligatoire' },
-        { status: 400 }
-      );
+    if (!data.identite.prenom_individu) {
+      console.log("❌ Prénom manquant");
+      return NextResponse.json({ error: 'Prénom obligatoire' }, { status: 400 });
     }
-
-    if (!data.identite?.sexe) {
-      console.error('❌ Sexe manquant');
-      return NextResponse.json(
-        { error: 'Sexe obligatoire' },
-        { status: 400 }
-      );
+    if (!data.identite.date_naissance) {
+      console.log("❌ Date de naissance manquante");
+      return NextResponse.json({ error: 'Date de naissance obligatoire' }, { status: 400 });
     }
-
+    if (!data.identite.sexe) {
+      console.log("❌ Sexe manquant");
+      return NextResponse.json({ error: 'Sexe obligatoire' }, { status: 400 });
+    }
     if (!data.id_classe) {
-      console.error('❌ Classe manquante');
-      return NextResponse.json(
-        { error: 'Classe obligatoire' },
-        { status: 400 }
-      );
+      console.log("❌ Classe manquante");
+      return NextResponse.json({ error: 'Classe obligatoire' }, { status: 400 });
     }
-
     if (!data.nom_tuteur) {
-      console.error('❌ Nom tuteur manquant');
-      return NextResponse.json(
-        { error: 'Nom du tuteur obligatoire' },
-        { status: 400 }
-      );
+      console.log("❌ Nom du tuteur manquant");
+      return NextResponse.json({ error: 'Nom du tuteur obligatoire' }, { status: 400 });
     }
-
     if (!data.contact_tuteur) {
-      console.error('❌ Contact tuteur manquant');
-      return NextResponse.json(
-        { error: 'Contact du tuteur obligatoire' },
-        { status: 400 }
-      );
+      console.log("❌ Contact tuteur manquant");
+      return NextResponse.json({ error: 'Contact du tuteur obligatoire' }, { status: 400 });
+    }
+    if (!data.annee_scolaire) {
+      console.log("❌ Année scolaire manquante");
+      return NextResponse.json({ error: 'Année scolaire obligatoire (annee_scolaire)' }, { status: 400 });
     }
     
-    // ✅ CRÉER LE DOCUMENT AVEC TOUS LES CHAMPS
+    // ✅ CRÉER LE DOCUMENT ÉLÈVE
     const docRef = await db.collection('eleves').add({
       identite: {
         nom_individu: data.identite.nom_individu,
@@ -118,34 +95,38 @@ export async function POST(req: NextRequest) {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    
+
     console.log('✅ Élève créé avec ID:', docRef.id);
-    
-    // ✅ METTRE À JOUR LA CLASSE (AUGMENTER nombre_eleve)
-    console.log(`🔄 Tentative de mise à jour de la classe ${data.id_classe}...`);
-    if (data.id_classe) {
-      try {
-        const classeDoc = await db.collection('classes').doc(data.id_classe).get();
-        console.log(`📋 Classe existe? ${classeDoc.exists}`);
-        console.log(`📋 Classe ID recherché: "${data.id_classe}"`);
-        
-        if (classeDoc.exists) {
-          const currentCount = classeDoc.data()?.nombre_eleve || 0;
-          console.log(`📊 Nombre actuel d'élèves: ${currentCount}`);
-          
-          await db.collection('classes').doc(data.id_classe).update({
-            nombre_eleve: currentCount + 1,
-          });
-          console.log(`✅ Classe ${data.id_classe} mise à jour: nombre_eleve=${currentCount + 1}`);
-        } else {
-          console.log(`❌ Classe ${data.id_classe} NOT FOUND dans Firestore!`);
-          console.log(`❌ Vérifiez que l'ID de classe est correct`);
-        }
-      } catch (err) {
-        console.error(`❌ Erreur mise à jour classe:`, err);
+
+    // ✅ CRÉER L’INSCRIPTION liée
+    await db.collection('inscriptions').add({
+      eleve_id: docRef.id,
+      id_classe: data.id_classe,
+      annee_scolaire: data.annee_scolaire,
+      date_inscription: new Date(),
+      origine_id_classe: null,
+      origine_classe: "",
+      verdict_fin_annee: "",
+      statut: "actif",
+      anciennete: "nouveau",
+    });
+
+    // ✅ METTRE À JOUR LA CLASSE
+    try {
+      const classeDoc = await db.collection('classes').doc(data.id_classe).get();
+      if (classeDoc.exists) {
+        const currentCount = classeDoc.data()?.nombre_eleve || 0;
+        await db.collection('classes').doc(data.id_classe).update({
+          nombre_eleve: currentCount + 1,
+        });
+        console.log(`✅ Classe ${data.id_classe} mise à jour: nombre_eleve=${currentCount + 1}`);
+      } else {
+        console.log(`❌ Classe ${data.id_classe} NOT FOUND dans Firestore!`);
       }
+    } catch (err) {
+      console.error(`❌ Erreur mise à jour classe:`, err);
     }
-    
+
     const newEleve = {
       id: docRef.id,
       identite: {
@@ -170,9 +151,9 @@ export async function POST(req: NextRequest) {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    
+
     return NextResponse.json(newEleve, { status: 201 });
-    
+
   } catch (error) {
     console.error('❌ Erreur POST:', error);
     return NextResponse.json(

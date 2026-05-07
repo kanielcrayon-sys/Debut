@@ -101,7 +101,26 @@ export async function PUT(
     await db.collection('eleves').doc(id).update({
       ...data,
       updatedAt: new Date(),
+      
     });
+    // ✅ METTRE À JOUR L’INSCRIPTION SI CHANGEMENT DE CLASSE
+if (eleveAncienneClasse !== eleveNouvelleClasse && data.annee_scolaire) {
+  console.log(`🔄 Mise à jour id_classe pour l'inscription de ${id} année ${data.annee_scolaire}`);
+  
+  // On cherche la bonne inscription sur eleve + année scolaire
+  const inscQuery = await db.collection('inscriptions')
+    .where('eleve_id', '==', id)
+    .where('annee_scolaire', '==', data.annee_scolaire)
+    .get();
+
+  if (!inscQuery.empty) {
+    const inscRef = inscQuery.docs[0].ref;
+    await inscRef.update({ id_classe: eleveNouvelleClasse });
+    console.log(`✅ Inscription mise à jour pour l'élève ${id} (id_classe=${eleveNouvelleClasse})`);
+  } else {
+    console.log(`❌ Aucune inscription trouvée pour l'élève ${id} en année ${data.annee_scolaire}`);
+  }
+}
     
     console.log('✅ Élève mis à jour');
     

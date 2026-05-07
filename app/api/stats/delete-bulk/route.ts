@@ -25,25 +25,27 @@ export async function POST(req: NextRequest) {
       classeId?: string;
       matiereId?: string;
       libelle_stat?: StatType;
+      annee_scolaire?: number; // ⚠️ Requis maintenant !
     };
 
-    const { classeId, matiereId, libelle_stat } = body;
+    const { classeId, matiereId, libelle_stat, annee_scolaire } = body;
 
-    if (!classeId || !matiereId || !libelle_stat) {
+    if (!classeId || !matiereId || !libelle_stat || typeof annee_scolaire !== "number") {
       return NextResponse.json({ error: "Paramètres invalides" }, { status: 400 });
     }
 
-    // 1) Trouver tous les docs statistique concernés
+    // 1) Supprimer les stats de la classe/matière/libelle_stat/annee_scolaire choisis
     const snap = await db
       .collection("statistique")
       .where("id_classe", "==", classeId)
       .where("id_matiere", "==", matiereId)
       .where("libelle_stat", "==", libelle_stat)
+      .where("annee_scolaire", "==", annee_scolaire)
       .get();
 
     if (snap.empty) {
       return NextResponse.json(
-        { success: false, code: "NOT_FOUND", message: "Stat pas encore créé" },
+        { success: false, code: "NOT_FOUND", message: "Stat pas encore créé (rien à supprimer)" },
         { status: 404 }
       );
     }
@@ -51,7 +53,7 @@ export async function POST(req: NextRequest) {
     const statDocIdsToDelete = snap.docs.map((d) => d.id);
     const statIdSet = new Set(statDocIdsToDelete);
 
-    // 2) Supprimer les docs statistique (batch)
+    // 2) Supprimer les docs "statistique" en batch
     let deleted = 0;
     for (let i = 0; i < snap.docs.length; i += 450) {
       const chunk = snap.docs.slice(i, i + 450);
@@ -61,53 +63,60 @@ export async function POST(req: NextRequest) {
       deleted += chunk.length;
     }
 
-    // 3) Nettoyer eleves.stat (tous formats)
-    const elevesSnap = await db.collection("eleves").where("id_classe", "==", classeId).get();
+    // 3) Récupère SEULEMENT les élèves ACTIFS de la CLASSE pour l'année
+    const inscriptionsSnap = await db
+      .collection("inscriptions")
+      .where("id_classe", "==", classeId)
+      .where("annee_scolaire", "==", annee_scolaire)
+      .where("statut", "==", "actif")
+      .get();
 
-    for (const e of elevesSnap.docs) {
-      const data = e.data() as EleveDoc | undefined;
-      const statArr = Array.isArray(data?.stat) ? data!.stat! : [];
+    const eleveIds: string[] = inscriptionsSnap.docs
+      .map((d) => d.data().eleve_id)
+      .filter((id): id is string => typeof id === "string");
 
-      const filtered = statArr.filter((entry) => {
-        // Format 1: string id
-        if (typeof entry === "string") {
-          // si c'est un des statIds supprimés => remove
-          return !statIdSet.has(entry);
+    // Firestore limitation: "in" max 10 per query
+    for (let i = 0; i < eleveIds.length; i += 10) {
+      const chunk = eleveIds.slice(i, i + 10);
+      if (chunk.length === 0) continue;
+
+      const elevesSnap = await db.collection("eleves").where("__name__", "in", chunk).get();
+
+      for (const e of elevesSnap.docs) {
+        const data = e.data() as EleveDoc | undefined;
+        const statArr = Array.isArray(data?.stat) ? data!.stat! : [];
+
+        const filtered = statArr.filter((entry) => {
+          // Format 1: string id
+          if (typeof entry === "string") {
+            return !statIdSet.has(entry);
+          }
+          // Format 2: objet
+          if (isObject(entry)) {
+            const obj = entry as EleveStatEntryObject;
+            if (!obj.id) return true;
+            if (statIdSet.has(obj.id)) return false;
+            const lib = String(obj.libelle_stat ?? "");
+            if (lib !== libelle_stat) return true;
+            if (!obj.id_matiere) return false;
+            return obj.id_matiere !== matiereId;
+          }
+          return true;
+        });
+
+        const changed = filtered.length !== statArr.length;
+        if (changed) {
+          await e.ref.update({ stat: filtered });
         }
-
-        // Format 2: objet
-        if (isObject(entry)) {
-          const obj = entry as EleveStatEntryObject;
-
-          // si l'objet n'a pas d'id, on ne peut pas lier à un doc => on garde
-          // (mais ça serait bien de nettoyer ces vieux objets plus tard)
-          if (!obj.id) return true;
-
-          // si son id fait partie des docs supprimés => remove
-          if (statIdSet.has(obj.id)) return false;
-
-          // fallback: si ça match libelle_stat et matière (quand dispo) => remove
-          const lib = String(obj.libelle_stat ?? "");
-          if (lib !== libelle_stat) return true;
-
-          // si id_matiere absent => ancien format: on supprime quand même
-          if (!obj.id_matiere) return false;
-
-          return obj.id_matiere !== matiereId;
-        }
-
-        // inconnu => garder par prudence
-        return true;
-      });
-
-      // évite write inutile
-      const changed = filtered.length !== statArr.length;
-      if (changed) {
-        await e.ref.update({ stat: filtered });
       }
     }
 
-    return NextResponse.json({ success: true, deleted, removedIds: statDocIdsToDelete.length });
+    return NextResponse.json({
+      success: true,
+      deleted,
+      removedIds: statDocIdsToDelete.length,
+      elevesNettoyés: eleveIds.length,
+    });
   } catch (e) {
     console.error("❌ POST /api/stats/delete-bulk:", e);
     return NextResponse.json(

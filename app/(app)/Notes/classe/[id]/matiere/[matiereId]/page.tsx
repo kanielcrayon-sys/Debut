@@ -16,7 +16,9 @@ import { MdArrowBack } from "react-icons/md";
 import { useParams, useRouter } from "next/navigation";
 import { useClasses } from "@/app/src/context/classeContext";
 import { useMatieres } from "@/app/src/context/matiereContext";
+import { useSchoolInfo } from "@/app/src/context/schoolContext";
 import { Eleve } from "@/app/src/interface/data";
+import { formatAnneeScolaire } from "@/app/src/lib/scolarite";
 
 type StatType = "Stat1" | "Stat2" | "Stat3";
 type Repartition = "Trimestre1" | "Trimestre2" | "Trimestre3" | "Semestre1" | "Semestre2";
@@ -89,7 +91,7 @@ export default function NotesMatierePage() {
 
   const allowedCreateReps = useMemo(() => allowedRepartitionsFor(statLibelle), [statLibelle]);
   const allowedUpdateReps = useMemo(() => allowedRepartitionsFor(updateLibelle), [updateLibelle]);
-
+const { anneeScolaire } = useSchoolInfo();
   // ✅ VÉRIFIER SI UN STAT EXISTE (robuste: ignore les strings + filtre matière si dispo)
   const getStat = (eleve: Eleve, libelleStatRecherche: StatType) => {
     const raw = (eleve as unknown as { stat?: unknown }).stat;
@@ -127,6 +129,7 @@ export default function NotesMatierePage() {
       url.searchParams.append("classeId", classeId);
       url.searchParams.append("page", page.toString());
       url.searchParams.append("limit", "10");
+      url.searchParams.append("annee_scolaire", String(anneeScolaire));
       if (search) url.searchParams.append("search", search);
 
       const response = await fetch(url.toString());
@@ -153,7 +156,7 @@ export default function NotesMatierePage() {
       const res = await fetch("/api/stats/sync-missing-for-classe-matiere", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ classeId, matiereId }),
+        body: JSON.stringify({ classeId, matiereId,annee_scolaire: anneeScolaire}),
       });
 
       if (!res.ok) {
@@ -210,6 +213,7 @@ export default function NotesMatierePage() {
         matiereId,
         libelle_stat: statLibelle,
         repartition: statRepartition,
+         annee_scolaire: anneeScolaire,
       }),
     });
 
@@ -252,7 +256,7 @@ export default function NotesMatierePage() {
       const res = await fetch("/api/stats/delete-bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ classeId, matiereId, libelle_stat: deleteLibelle }),
+        body: JSON.stringify({ classeId, matiereId,annee_scolaire: anneeScolaire,libelle_stat: deleteLibelle }),
       });
 
       const json = await res.json().catch(() => null);
@@ -306,6 +310,7 @@ export default function NotesMatierePage() {
           matiereId,
           libelle_stat: updateLibelle,
           newRepartition,
+           annee_scolaire: anneeScolaire,
         }),
       });
 
@@ -361,7 +366,14 @@ export default function NotesMatierePage() {
               {selectedClasse.libelle_classe} • {totalCount} élève(s)
             </p>
           </div>
+                
         </div>
+          <div className="flex-1 flex justify-center">
+              <p className="text-gray-800 dark:text-white text-lg font-semibold">
+                Année scolaire : {formatAnneeScolaire(anneeScolaire)}
+              </p>
+          </div>
+             <div style={{ width: "220px" }}></div>
       </div>
 
       {/* INFOS MATIÈRE */}

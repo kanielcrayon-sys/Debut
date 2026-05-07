@@ -378,10 +378,15 @@ export default function EleveStatPage() {
       setPrinting(true);
       setErrorState(null);
 
-      const elevesSnap = await getDocs(
-        query(collection(db, "eleves"), where("id_classe", "==", classe.id), where("statut_eleve", "==", "actif"))
+     const inscSnap = await getDocs(
+        query(
+          collection(db, "inscriptions"),
+          where("id_classe", "==", classe.id),
+          where("annee_scolaire", "==", annee),
+          where("statut", "==", "actif")
+        )
       );
-      const effectifClasse = elevesSnap.size;
+      const effectifClasse = inscSnap.size;
 
       const matiereIds = Array.isArray(classe.id_matieres) ? classe.id_matieres : [];
       const matiereInfoById: Record<string, Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere">> = {};

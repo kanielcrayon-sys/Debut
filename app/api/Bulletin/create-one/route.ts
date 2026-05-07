@@ -300,6 +300,21 @@ export async function POST(req: NextRequest) {
     const eleveSnap = await db.collection("eleves").doc(id_eleve).get();
     if (!eleveSnap.exists) return NextResponse.json({ error: "Élève introuvable" }, { status: 404 });
     const eleve = { id: eleveSnap.id, ...(eleveSnap.data() as Omit<Eleve, "id">) } as Eleve;
+    // Patch multi-année : On s'assure que cet élève a une inscription "officielle" dans cette classe ET cette année
+    const inscSnap = await db
+      .collection("inscriptions")
+      .where("eleve_id", "==", id_eleve)
+      .where("id_classe", "==", eleve.id_classe)
+      .where("annee_scolaire", "==", annee_scolaire)
+      .where("statut", "==", "actif")
+      .get();
+
+    if (inscSnap.empty) {
+      return NextResponse.json(
+        { error: "Cet élève n'est pas inscrit dans cette classe pour cette année scolaire." },
+        { status: 400 }
+      );
+    }
 
     if (!eleve.id_classe) return NextResponse.json({ error: "id_classe manquant sur élève" }, { status: 400 });
 

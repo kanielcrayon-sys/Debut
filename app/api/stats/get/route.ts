@@ -16,13 +16,22 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const eleveId = searchParams.get('eleveId');
     const matiereId = searchParams.get('matiereId');
+    const anneeScolaire = searchParams.get('annee_scolaire'); // <-- obligatoire
 
-    console.log(`🔍 GET /api/stats/get - eleveId=${eleveId}, matiereId=${matiereId}`);
+    if (!eleveId || !matiereId || !anneeScolaire) {
+      return NextResponse.json(
+        { error: 'Paramètres invalides (eleveId, matiereId, annee_scolaire requis)' },
+        { status: 400 }
+      );
+    }
+
+    console.log(`🔍 GET /api/stats/get - eleveId=${eleveId}, matiereId=${matiereId}, annee_scolaire=${anneeScolaire}`);
 
     const snapshot = await db
       .collection('statistique')
       .where('id_eleve', '==', eleveId)
       .where('id_matiere', '==', matiereId)
+      .where('annee_scolaire', '==', Number(anneeScolaire))
       .limit(1)
       .get();
 

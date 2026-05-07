@@ -261,7 +261,10 @@ export default function BulletinPage() {
 
       const normalizedSearch = normalizeSearch(search);
       if (normalizedSearch) url.searchParams.set("search", normalizedSearch);
-
+        const annee = anneeSelected ?? anneeScolaireActive;
+        if (typeof annee === "number") {
+          url.searchParams.set("annee_scolaire", annee.toString());
+        }
       const response = await fetch(url.toString());
       if (!response.ok) {
         const text = await response.text().catch(() => "");
