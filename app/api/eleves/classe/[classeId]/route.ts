@@ -13,6 +13,7 @@ type RawInscription = {
   eleve_id: string;
   id_classe: string;
   annee_scolaire?: number;
+  statut?: string;
 };
 
 export async function GET(
@@ -37,6 +38,7 @@ export async function GET(
       .collection("inscriptions")
       .where("id_classe", "==", classeId)
       .where("annee_scolaire", "==", anneeScolaire)
+      .where("statut", "==", "actif")
       .get();
     console.log("Inscriptions trouvées:", inscSnap.size);
     inscSnap.forEach(d => console.log("Insc#", d.id, d.data()));

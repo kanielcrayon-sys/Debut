@@ -16,15 +16,22 @@ interface Stat {
   id_classe: string;
   id_matiere: string;
   id_eleve: string;
+
+  // ✅ pour filtrer correctement les recalculs
+  libelle_stat: "Stat1" | "Stat2" | "Stat3";
+  repartition: "Trimestre1" | "Trimestre2" | "Trimestre3" | "Semestre1" | "Semestre2";
+  annee_scolaire: number;
+
   notes: Note[];
   identite?: {
     nom_individu: string;
   };
-  moyenne_classe?: number;
-  moyenne_matiere?: number;
+
+  moyenne_classe?: number | null;
+  moyenne_matiere?: number | null;
   coef?: number;
   note_definitive?: number | null;
-  rang?: number;
+  rang?: number | null;
   rang_label?: string;
   observations?: string;
 }
@@ -100,7 +107,7 @@ export async function POST(req: NextRequest) {
     // ✅ RÉCUPÉRER LE COEF DE LA MATIÈRE
     const matiereDoc = await db.collection('matieres').doc(statData.id_matiere).get();
     const matiereData = matiereDoc.data();
-    const coef = matiereData?.coef || 1;
+    const coef = typeof matiereData?.coef === "number" ? matiereData.coef : 1;
     const currentNotes: Note[] = Array.isArray(statData.notes) ? statData.notes : [];
     
     // ✅ SUPPRIMER LA NOTE
@@ -137,6 +144,9 @@ export async function POST(req: NextRequest) {
       .collection('statistique')
       .where('id_classe', '==', statData.id_classe)
       .where('id_matiere', '==', statData.id_matiere)
+      .where("libelle_stat", "==", statData.libelle_stat)
+     .where("repartition", "==", statData.repartition)
+      .where("annee_scolaire", "==", statData.annee_scolaire)
       .get();
 
     interface EleveWithMoyenne {
@@ -233,12 +243,21 @@ export async function POST(req: NextRequest) {
             rang: noteRang,
           };
         });
+                const docMoyenneClasse = calculateMoyenneClasse(notesWithRang);
+        const docMoyenneMatiere = calculateMoyenneMatiere(notesWithRang);
+        const docObservations = calculateObservationsFromMoyenne(docMoyenneMatiere);
+        const docNoteDefinitive = calculateNoteDefinitive(docMoyenneMatiere, coef);
 
-        await updateStatRef.update({
-          notes: notesWithRang,
-          rang: eleve.moyenneMatiere !== null ? currentRang : null,
-          rang_label: rangLabel,
-        });
+       await updateStatRef.update({
+        notes: notesWithRang,
+        moyenne_classe: docMoyenneClasse,
+        moyenne_matiere: docMoyenneMatiere,
+        coef,
+        note_definitive: docNoteDefinitive,
+        observations: docObservations,
+        rang: docMoyenneMatiere !== null ? currentRang : null,
+        rang_label: rangLabel,
+      });
       }
     }
 

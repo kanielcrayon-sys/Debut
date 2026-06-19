@@ -80,7 +80,7 @@ export const sidebarmenu: MenuItem[] = [
     title: "Resultats",
     href: "/Resultats",
     icon: <BarChartIcon />,
-    roles: ["admin"],       // ADMIN ONLY (change -> ["admin","user"] si tu veux que "user" voie aussi celui-ci)
+    roles: ["admin" ,"user"],       // ADMIN ONLY (change -> ["admin","user"] si tu veux que "user" voie aussi celui-ci)
   },
   {
     title: "Deconnexion",

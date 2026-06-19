@@ -29,13 +29,29 @@ type ReadyByStat = Record<StatType, ReadyCountsMap>;
 
 type PrintData = {
   bulletins: Bulletin[];
-  matiereInfoById: Record<string, Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere">>;
+  matiereInfoById: Record<string, Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere" | "enseignant">>;
   effectifClasse: number;
   moyenneGeneraleClasse: number | null;
+  faibleMoyenneClasse: number | null; // +
+  forteMoyenneClasse: number | null;
   filename: string;
   classeLibelle: string;
 };
+type NotReadyItem = {
+  id_eleve: string;
+  nom: string;
+  prenom: string;
+  count: number;
+  nbMatieres: number;
+};
 
+type CreateResult = {
+  alreadyExistsCount: number;
+  notReadyCount: number;
+  createdCount: number;
+  notReady?: NotReadyItem[];
+  message?: string;
+};
 const toNumber = (v: unknown): number => {
   if (typeof v === "number") return v;
   if (typeof v === "string") return Number(v.replace(",", "."));
@@ -66,12 +82,18 @@ const getRepartitionForStatType = (statType: StatType, mode: PeriodMode): Repart
   return "Trimestre3";
 };
 
-type MoyenneGeneraleClasseDoc = { moyenneGenerale?: number };
+type MoyenneGeneraleClasseDoc = { 
+  moyenneGenerale?: number;
+   moyenneFaible?: number; // +
+  moyenneForte?: number;
+ };
 
 // ✅ type minimal pour lire inscriptions sans any
 type InscriptionYearDoc = { annee_scolaire?: number };
 
+
 export default function BulletinPage() {
+
   const { loading } = useRoleGuard(["admin"]);
   
   const { classes } = useClasses();
@@ -521,6 +543,13 @@ export default function BulletinPage() {
       const run = async (force: boolean) => {
         const repartition = getRepartitionForStatType(statType, periodMode);
 
+        console.log("FRONT POST /api/Bulletin/create-for-class", {
+    id_classe: selectedClasseId,
+    libelle_stat: statType,
+    repartition,
+    force,
+  });
+
         const res = await fetch("/api/Bulletin/create-for-class", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -534,23 +563,24 @@ export default function BulletinPage() {
 
         const json = await res.json();
         if (!res.ok) throw new Error(json?.error ?? "Erreur création bulletins");
-        return json as {
-          alreadyExistsCount: number;
-          notReadyCount: number;
-          createdCount: number;
-          message?: string;
-        };
+       return json as CreateResult;
       };
 
       const first = await run(false);
 
-      if (first.notReadyCount > 0) {
-        alert(
-          `Impossible: certains élèves ne sont pas prêts pour ${statType}.\n` +
-            `Complète d'abord toutes les matières (moyenne_matiere) pour ces élèves.`
-        );
-        return;
-      }
+     if (first.notReadyCount > 0) {
+  const lines = (first.notReady ?? [])
+    .slice(0, 10)
+    .map((x: NotReadyItem) => `- ${x.nom} ${x.prenom} (${x.count}/${x.nbMatieres})`)
+    .join("\n");
+
+  alert(
+    `Impossible: ${first.notReadyCount} élève(s) non prêts pour ${statType}.\n` +
+    `Il faut une note_definitive valide (0..20) dans toutes les matières.\n\n` +
+    (lines ? `Exemples:\n${lines}` : "")
+  );
+  return;
+}
 
       if (first.alreadyExistsCount > 0) {
         const ok = confirm(
@@ -571,83 +601,136 @@ export default function BulletinPage() {
       setCreatingForClass(null);
     }
   };
+  
 
-  const handlePrintBulletinsForClass = async (statType: StatType) => {
-    if (!selectedClasseId || !selectedClasse) return;
-    if (!anneeSelected) return;
+const handlePrintBulletinsForClass = async (statType: StatType) => {
+  if (!selectedClasseId || !selectedClasse) return;
+  if (!anneeSelected) return;
 
-    try {
-      setPrintingForClass(statType);
-      setErrorState(null);
+  try {
+    setPrintingForClass(statType);
+    setErrorState(null);
 
-      const repartition = getRepartitionForStatType(statType, periodMode);
+    const repartition = getRepartitionForStatType(statType, periodMode);
 
-      const elevesSnap = await getDocs(
-        query(collection(db, "eleves"), where("id_classe", "==", selectedClasseId), where("statut_eleve", "==", "actif"))
+    const inscSnap = await getDocs(
+      query(
+        collection(db, "inscriptions"),
+        where("id_classe", "==", selectedClasseId),
+        where("annee_scolaire", "==", anneeSelected),
+        where("statut", "==", "actif")
+      )
+    );
+    const effectif = inscSnap.size;
+    if (!effectif) throw new Error("Aucun élève actif dans cette classe.");
+
+    const bulletinsSnap = await getDocs(
+      query(
+        collection(db, "bulletins"),
+        where("id_classe", "==", selectedClasseId),
+        where("annee_scolaire", "==", anneeSelected),
+        where("libelle_stat", "==", statType),
+        where("repartition", "==", repartition)
+      )
+    );
+
+    if (bulletinsSnap.size !== effectif) {
+      throw new Error(
+        `Impossible d'imprimer: bulletins incomplets pour ${statType}/${repartition}/${anneeSelected}. (${bulletinsSnap.size}/${effectif})`
       );
-      const effectif = elevesSnap.size;
-      if (!effectif) throw new Error("Aucun élève actif dans cette classe.");
-
-      const bulletinsSnap = await getDocs(
-        query(
-          collection(db, "bulletins"),
-          where("id_classe", "==", selectedClasseId),
-          where("annee_scolaire", "==", anneeSelected),
-          where("libelle_stat", "==", statType),
-          where("repartition", "==", repartition)
-        )
-      );
-
-      if (bulletinsSnap.size !== effectif) {
-        throw new Error(
-          `Impossible d'imprimer: bulletins incomplets pour ${statType}/${repartition}/${anneeSelected}. (${bulletinsSnap.size}/${effectif})`
-        );
-      }
-
-      const bulletins = bulletinsSnap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<Bulletin, "id">),
-      })) as Bulletin[];
-
-      const matiereIds = Array.isArray(selectedClasse.id_matieres) ? selectedClasse.id_matieres : [];
-      const matiereInfoById: Record<string, Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere">> = {};
-
-      for (const id of matiereIds) {
-        const snap = await getDoc(doc(db, "matieres", id));
-        if (!snap.exists) continue;
-
-        const m = snap.data() as Partial<Matiere>;
-        matiereInfoById[id] = {
-          coef: typeof m.coef === "number" ? m.coef : 1,
-          qualificatif: m.qualificatif === "Facultative" ? "Facultative" : "Fondamentale",
-          libelle_matiere: m.libelle_matiere ?? "",
-        };
-      }
-
-      const mgId = `${selectedClasseId}_${statType}_${repartition}_${anneeSelected}`;
-      const mgSnap = await getDoc(doc(db, "moyennes_generales_classes", mgId));
-      const mgData = mgSnap.exists() ? (mgSnap.data() as MoyenneGeneraleClasseDoc) : null;
-      const moyenneGeneraleClasse = typeof mgData?.moyenneGenerale === "number" ? mgData.moyenneGenerale : null;
-
-      const classeLibelle = selectedClasse.libelle_classe ?? "";
-      const filename = `Bulletins_${classeLibelle}_${statType}_${repartition}_${anneeSelected}.pdf`;
-
-      setPrintData({
-        bulletins,
-        matiereInfoById,
-        effectifClasse: effectif,
-        moyenneGeneraleClasse,
-        filename,
-        classeLibelle,
-      });
-      setPrintModalOpen(true);
-    } catch (e) {
-      console.error(e);
-      setErrorState(e instanceof Error ? e.message : "Erreur impression bulletins");
-    } finally {
-      setPrintingForClass(null);
     }
-  };
+
+    const bulletins = bulletinsSnap.docs.map((d) => ({
+      id: d.id,
+      ...(d.data() as Omit<Bulletin, "id">),
+    })) as Bulletin[];
+
+    const matiereIds = Array.isArray(selectedClasse.id_matieres) ? selectedClasse.id_matieres : [];
+    const matiereInfoById: Record<string, Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere" | "enseignant">> = {};
+
+    for (const id of matiereIds) {
+      const snap = await getDoc(doc(db, "matieres", id));
+      if (!snap.exists()) continue;
+
+      const m = snap.data() as Partial<Matiere>;
+      matiereInfoById[id] = {
+        coef: typeof m.coef === "number" ? m.coef : 1,
+        qualificatif: m.qualificatif === "Facultative" ? "Facultative" : "Fondamentale",
+        libelle_matiere: m.libelle_matiere ?? "",
+        enseignant: m.enseignant ?? "",
+      };
+    }
+
+    const useAnnual = repartition === "Trimestre3" || repartition === "Semestre2";
+
+    // ✅ accepte number ET string
+  const values = bulletins
+  .map((b) => {
+    const bb = b as unknown as Record<string, unknown>;
+    const raw = useAnnual ? bb["moyenne_annuelle"] : bb["moyenne_trimestrielle"];
+
+    const n =
+      typeof raw === "number"
+        ? raw
+        : typeof raw === "string"
+        ? Number(raw.replace(",", "."))
+        : NaN;
+
+    return Number.isFinite(n) ? n : null;
+  })
+  .filter((v): v is number => v !== null);
+
+ 
+    // fallback doc MG seulement si values vide
+    const mgId = `${selectedClasseId}_${statType}_${repartition}_${anneeSelected}`;
+    const mgSnap = await getDoc(doc(db, "moyennes_generales_classes", mgId));
+    const mgData = mgSnap.exists() ? (mgSnap.data() as MoyenneGeneraleClasseDoc) : null;
+
+    const moyenneGeneraleClasse =
+      values.length > 0
+        ? Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(2))
+        : typeof mgData?.moyenneGenerale === "number"
+        ? mgData.moyenneGenerale
+        : null;
+
+    const faibleMoyenneClasse =
+      values.length > 0
+        ? Number(Math.min(...values).toFixed(2))
+        : typeof mgData?.moyenneFaible === "number"
+        ? mgData.moyenneFaible
+        : null;
+
+    const forteMoyenneClasse =
+      values.length > 0
+        ? Number(Math.max(...values).toFixed(2))
+        : typeof mgData?.moyenneForte === "number"
+        ? mgData.moyenneForte
+        : null;
+
+    
+   
+    const classeLibelle = selectedClasse.libelle_classe ?? "";
+    const filename = `Bulletins_${classeLibelle}_${statType}_${repartition}_${anneeSelected}.pdf`;
+
+    setPrintData({
+      bulletins,
+      matiereInfoById,
+      effectifClasse: effectif,
+      moyenneGeneraleClasse,
+      faibleMoyenneClasse,
+      forteMoyenneClasse,
+      filename,
+      classeLibelle,
+    });
+
+    setPrintModalOpen(true);
+  } catch (e) {
+    console.error(e);
+    setErrorState(e instanceof Error ? e.message : "Erreur impression bulletins");
+  } finally {
+    setPrintingForClass(null);
+  }
+};
 
   if (!selectedClasseId) {
     return (
@@ -805,6 +888,8 @@ export default function BulletinPage() {
           matiereInfoById={printData.matiereInfoById}
           effectifClasse={printData.effectifClasse}
           moyenneGeneraleClasse={printData.moyenneGeneraleClasse}
+          faibleMoyenneClasse={printData.faibleMoyenneClasse}
+           forteMoyenneClasse={printData.forteMoyenneClasse}
         />
       )}
 
@@ -888,13 +973,13 @@ export default function BulletinPage() {
               </Button>
 
               <Button
-                variant="outlined"
-                disabled={!selectedClasseId || printingForClass === st || !anneeSelected}
-                onClick={() => handlePrintBulletinsForClass(st)}
-                title="Imprime seulement si tous les bulletins de la période existent"
-              >
-                {printingForClass === st ? "Impression..." : "Imprimer Bulletins"}
-              </Button>
+              variant="outlined"
+              disabled={!selectedClasseId || printingForClass === st || !anneeSelected}
+              onClick={() => handlePrintBulletinsForClass(st)}
+              title="Imprime seulement si tous les bulletins de la période existent"
+            >
+              {printingForClass === st ? "Impression..." : "Imprimer Bulletins"}
+            </Button>
             </div>
           ))}
         </div>

@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/app/src/lib/firebase-admin';
-import { calculateObservation } from '@/app/src/lib/observations';
+import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/app/src/lib/firebase-admin";
+import { calculateObservation } from "@/app/src/lib/observations";
 
 interface Note {
   id: string;
@@ -17,15 +17,22 @@ interface Stat {
   id_classe: string;
   id_matiere: string;
   id_eleve: string;
+
+  // ✅ pour filtrer correctement les recalculs
+  libelle_stat: "Stat1" | "Stat2" | "Stat3";
+  repartition: "Trimestre1" | "Trimestre2" | "Trimestre3" | "Semestre1" | "Semestre2";
+  annee_scolaire: number;
+
   notes: Note[];
   identite?: {
     nom_individu: string;
   };
-  moyenne_classe?: number;
-  moyenne_matiere?: number;
+
+  moyenne_classe?: number | null;
+  moyenne_matiere?: number | null;
   coef?: number;
   note_definitive?: number | null;
-  rang?: number;
+  rang?: number | null;
   rang_label?: string;
   observations?: string;
 }
@@ -68,81 +75,85 @@ const calculateObservationsFromMoyenne = (moyenne: number | null): string => {
 // ✅ CRÉER LE LABEL DU RANG
 const createRangLabel = (rang: number | null, isExAequo: boolean): string => {
   if (rang === null) return "";
-  
   if (rang === 1) return "1er";
   return `${rang}ème${isExAequo ? " ex" : ""}`;
 };
+
 // ✅ CALCULER NOTE DÉFINITIVE
 const calculateNoteDefinitive = (moyenneMatiere: number | null, coef: number): number | null => {
   if (moyenneMatiere === null) return null;
   return parseFloat((moyenneMatiere * coef).toFixed(2));
 };
+
 export async function POST(req: NextRequest) {
   try {
     const { statId, noteId, valeur, isSpecial } = await req.json();
 
-    console.log(`📝 Modification note - Stat: ${statId}, Note: ${noteId}, Nouvelle valeur: ${valeur}`);
+    if (!statId || !noteId) {
+      return NextResponse.json({ error: "statId/noteId manquant" }, { status: 400 });
+    }
+
+    const valeurNum = typeof valeur === "number" ? valeur : Number(valeur);
+    if (!Number.isFinite(valeurNum) || valeurNum < 0 || valeurNum > 20) {
+      return NextResponse.json({ error: "Valeur invalide (0-20)" }, { status: 400 });
+    }
+
+    console.log(`📝 Modification note - Stat: ${statId}, Note: ${noteId}, Nouvelle valeur: ${valeurNum}`);
 
     // ✅ RÉCUPÉRER LE STAT ACTUEL
-    const statRef = db.collection('statistique').doc(statId);
+    const statRef = db.collection("statistique").doc(statId);
     const statDoc = await statRef.get();
-     
-    
+
     if (!statDoc.exists) {
-      return NextResponse.json(
-        { error: 'Stat non trouvé' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Stat non trouvé" }, { status: 404 });
     }
-      const statData = statDoc.data() as Stat;
-        // ✅ RÉCUPÉRER LE COEF DE LA MATIÈRE
-    const matiereDoc = await db.collection('matieres').doc(statData.id_matiere).get();
+
+    const statData = statDoc.data() as Stat;
+
+    // ✅ RÉCUPÉRER LE COEF LIVE DE LA MATIÈRE
+    const matiereDoc = await db.collection("matieres").doc(statData.id_matiere).get();
     const matiereData = matiereDoc.data();
-    const coef = statData.coef ?? matiereData?.coef ?? 1; 
+    const coef: number = typeof matiereData?.coef === "number" ? matiereData.coef : 1;
 
-    const currentNotes: Note[] = Array.isArray(statData.notes) ? statData.notes : [];
-    
+    const currentNotes: Note[] = Array.isArray(statData.notes) ? [...statData.notes] : [];
+
     // ✅ TROUVER ET MODIFIER LA NOTE
-    const noteIndex = currentNotes.findIndex((n: Note) => n.id === noteId);
+    const noteIndex = currentNotes.findIndex((n) => n.id === noteId);
     if (noteIndex === -1) {
-      return NextResponse.json(
-        { error: 'Note non trouvée' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Note non trouvée" }, { status: 404 });
     }
 
-    const observation = calculateObservation(valeur);
+    const observation = calculateObservation(valeurNum);
     currentNotes[noteIndex] = {
       ...currentNotes[noteIndex],
-      valeur,
+      valeur: valeurNum,
       observation,
       isSpecial: isSpecial ?? currentNotes[noteIndex].isSpecial,
     };
 
-    console.log(`🔄 Note modifiée`);
-
-    // ✅ CALCULER NOUVELLE MOYENNE_CLASSE ET MOYENNE_MATIERE
+    // ✅ RECALCUL STAT CIBLE
     const moyenneClasse = calculateMoyenneClasse(currentNotes);
     const moyenneMatiere = calculateMoyenneMatiere(currentNotes);
     const observations = calculateObservationsFromMoyenne(moyenneMatiere);
-    // ✅ CALCULER NOTE DÉFINITIVE
     const noteDefinitive = calculateNoteDefinitive(moyenneMatiere, coef);
-    // ✅ METTRE À JOUR LE STAT
+
     await statRef.update({
       notes: currentNotes,
       moyenne_classe: moyenneClasse,
       moyenne_matiere: moyenneMatiere,
       observations,
       coef,
-      note_definitive: noteDefinitive, 
+      note_definitive: noteDefinitive,
     });
-    console.log(`✅ Stat mise à jour avec nouvelles moyennes`);
 
-    // ✅ RECALCULER LES RANGS (même logique que add-note)
+    // ✅ RECALCULER LES RANGS DANS LE BON PÉRIMÈTRE
     const snapshot = await db
-      .collection('statistique')
-      .where('id_classe', '==', statData.id_classe)
-      .where('id_matiere', '==', statData.id_matiere)
+      .collection("statistique")
+      .where("id_classe", "==", statData.id_classe)
+      .where("id_matiere", "==", statData.id_matiere)
+      .where("libelle_stat", "==", statData.libelle_stat)
+      .where("repartition", "==", statData.repartition)
+      .where("annee_scolaire", "==", statData.annee_scolaire)
       .get();
 
     interface EleveWithMoyenne {
@@ -154,113 +165,102 @@ export async function POST(req: NextRequest) {
     const elevesWithMoyennes: EleveWithMoyenne[] = [];
     const statDataMap = new Map<string, Stat>();
 
-    snapshot.forEach((doc) => {
-      const docData = doc.data() as Stat;
+    snapshot.forEach((docSnap) => {
+      const docData = docSnap.data() as Stat;
       const notes: Note[] = Array.isArray(docData.notes) ? docData.notes : [];
       const docMoyenneMatiere = calculateMoyenneMatiere(notes);
-      
-      statDataMap.set(doc.id, docData);
+
+      statDataMap.set(docSnap.id, docData);
       elevesWithMoyennes.push({
-        statId: doc.id,
+        statId: docSnap.id,
         moyenneMatiere: docMoyenneMatiere,
         nom: docData.identite?.nom_individu || "",
       });
     });
 
-    // ✅ TRIER PAR MOYENNE_MATIERE DÉCROISSANTE
+    // ✅ TRI RANG
     elevesWithMoyennes.sort((a, b) => {
-      if (a.moyenneMatiere === null && b.moyenneMatiere === null) {
-        return a.nom.localeCompare(b.nom);
-      }
+      if (a.moyenneMatiere === null && b.moyenneMatiere === null) return a.nom.localeCompare(b.nom);
       if (a.moyenneMatiere === null) return 1;
       if (b.moyenneMatiere === null) return -1;
-
-      if (b.moyenneMatiere !== a.moyenneMatiere) {
-        return b.moyenneMatiere - a.moyenneMatiere;
-      }
+      if (b.moyenneMatiere !== a.moyenneMatiere) return b.moyenneMatiere - a.moyenneMatiere;
       return a.nom.localeCompare(b.nom);
     });
 
-    // ✅ METTRE À JOUR LES RANGS
+    // ✅ UPDATE RANG + NOTES + CHAMPS DÉRIVÉS
     let currentRang = 1;
     for (let i = 0; i < elevesWithMoyennes.length; i++) {
       const eleve = elevesWithMoyennes[i];
-      
-      let isExAequo = false;
-      
-      if (i > 0 && eleve.moyenneMatiere === elevesWithMoyennes[i - 1].moyenneMatiere) {
-        isExAequo = true;
-      } else {
-        currentRang = i + 1;
-        isExAequo = false;
-      }
+      const prev = i > 0 ? elevesWithMoyennes[i - 1] : null;
 
-      const rangLabel = createRangLabel(
-        eleve.moyenneMatiere !== null ? currentRang : null,
-        isExAequo
+      const isExAequo = Boolean(
+        prev && eleve.moyenneMatiere !== null && eleve.moyenneMatiere === prev.moyenneMatiere
       );
+      if (!isExAequo) currentRang = i + 1;
 
-      const updateStatRef = db.collection('statistique').doc(eleve.statId);
+      const rangLabel = createRangLabel(eleve.moyenneMatiere !== null ? currentRang : null, isExAequo);
+
+      const updateStatRef = db.collection("statistique").doc(eleve.statId);
       const updateStatData = statDataMap.get(eleve.statId);
+      if (!updateStatData) continue;
 
-      if (updateStatData) {
-        const notesWithRang: Note[] = updateStatData.notes.map((note: Note) => {
-          const allNotesOfType: { statId: string; valeur: number }[] = [];
+      const notesWithRang: Note[] = updateStatData.notes.map((note) => {
+        const allNotesOfType: { statId: string; valeur: number }[] = [];
 
-          elevesWithMoyennes.forEach((e) => {
-            const eStatData = statDataMap.get(e.statId);
-            if (eStatData) {
-              const noteOfType = eStatData.notes.find((n) => n.type_evaluation === note.type_evaluation);
-              if (noteOfType) {
-                allNotesOfType.push({
-                  statId: e.statId,
-                  valeur: noteOfType.valeur,
-                });
-              }
+        elevesWithMoyennes.forEach((e) => {
+          const eStatData = statDataMap.get(e.statId);
+          if (!eStatData) return;
+
+          const noteOfType = eStatData.notes.find((n) => n.type_evaluation === note.type_evaluation);
+          if (noteOfType) allNotesOfType.push({ statId: e.statId, valeur: noteOfType.valeur });
+        });
+
+        allNotesOfType.sort((a, b) => b.valeur - a.valeur);
+
+        let noteRang = 1;
+        for (let j = 0; j < allNotesOfType.length; j++) {
+          if (allNotesOfType[j].statId === eleve.statId) {
+            noteRang = j + 1;
+            if (j > 0 && allNotesOfType[j].valeur === allNotesOfType[j - 1].valeur) {
+              noteRang = j;
             }
-          });
-
-          allNotesOfType.sort((a, b) => b.valeur - a.valeur);
-
-          let noteRang = 1;
-          for (let j = 0; j < allNotesOfType.length; j++) {
-            if (allNotesOfType[j].statId === eleve.statId) {
-              if (j > 0 && allNotesOfType[j].valeur === allNotesOfType[j - 1].valeur) {
-                noteRang = j;
-              } else {
-                noteRang = j + 1;
-              }
-              break;
-            }
+            break;
           }
+        }
 
-          return {
-            ...note,
-            rang: noteRang,
-          };
-        });
+        return { ...note, rang: noteRang };
+      });
 
-        await updateStatRef.update({
-          notes: notesWithRang,
-          rang: eleve.moyenneMatiere !== null ? currentRang : null,
-          rang_label: rangLabel,
-        });
-      }
+      const docMoyenneClasse = calculateMoyenneClasse(notesWithRang);
+      const docMoyenneMatiere = calculateMoyenneMatiere(notesWithRang);
+      const docObservations = calculateObservationsFromMoyenne(docMoyenneMatiere);
+      const docNoteDefinitive = calculateNoteDefinitive(docMoyenneMatiere, coef);
+
+      await updateStatRef.update({
+        notes: notesWithRang,
+        moyenne_classe: docMoyenneClasse,
+        moyenne_matiere: docMoyenneMatiere,
+        coef,
+        note_definitive: docNoteDefinitive,
+        observations: docObservations,
+        rang: docMoyenneMatiere !== null ? currentRang : null,
+        rang_label: rangLabel,
+      });
     }
 
-    console.log('✅ Rangs recalculés après modification');
+    console.log("✅ Rangs recalculés après modification");
 
     return NextResponse.json({
       success: true,
-      message: 'Note modifiée avec succès',
+      message: "Note modifiée avec succès",
       moyenneClasse,
       moyenneMatiere,
       observations,
     });
   } catch (error) {
-    console.error('❌ Erreur POST stats/update-note:', error);
+    console.error("❌ Erreur POST stats/update-note:", error);
     return NextResponse.json(
-      { error: `Erreur: ${error instanceof Error ? error.message : 'Erreur inconnue'}` },
+      { error: `Erreur: ${error instanceof Error ? error.message : "Erreur inconnue"}` },
       { status: 500 }
     );
   }

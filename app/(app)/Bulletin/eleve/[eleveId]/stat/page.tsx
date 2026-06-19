@@ -37,7 +37,12 @@ type StatistiqueDoc = Stat & {
   observations?: string;
 };
 
-type MoyenneGeneraleClasseDoc = { moyenneGenerale?: number };
+type MoyenneGeneraleClasseDoc = { moyenneGenerale?: number; 
+  faibleMoyenne?: number; 
+  forteMoyenne?: number;
+  moyenneFaible?: number;
+  moyenneForte?: number;
+};
 type InscriptionYearDoc = { annee_scolaire?: number };
 
 const getNoteValue = (s: StatistiqueDoc, type: "DEVOIR" | "COMPO") => {
@@ -88,7 +93,7 @@ export default function EleveStatPage() {
 
   const [bulletin, setBulletin] = useState<Bulletin | null>(null);
   const [loadingBulletin, setLoadingBulletin] = useState(false);
-  const [creatingBulletin, setCreatingBulletin] = useState(false);
+  
 
   const [anneesDisponibles, setAnneesDisponibles] = useState<number[]>([]);
   const [anneeSelected, setAnneeSelected] = useState<number | null>(null);
@@ -98,9 +103,11 @@ export default function EleveStatPage() {
   const [printPayload, setPrintPayload] = useState<null | {
     filename: string;
     bulletin: Bulletin;
-    matiereInfoById: Record<string, Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere">>;
+    matiereInfoById: Record<string, Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere"  | "enseignant">>;
     effectifClasse: number;
     moyenneGeneraleClasse: number | null;
+     faibleMoyenneClasse: number | null; // ✅
+    forteMoyenneClasse: number | null;
   }>(null);
 
   const nbMatieres = useMemo(() => getNbMatieres(classe), [classe]);
@@ -226,10 +233,7 @@ export default function EleveStatPage() {
     return ok;
   }, [stats]);
 
-  const ready = useMemo(() => {
-    if (!nbMatieres) return false;
-    return filteredStats.length === nbMatieres;
-  }, [filteredStats.length, nbMatieres]);
+  
 
   const fetchData = useCallback(async () => {
     try {
@@ -267,8 +271,36 @@ export default function EleveStatPage() {
       );
 
       const snap = await getDocs(qStats);
-      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<StatistiqueDoc, "id">) }));
-      setStats(rows);
+const rawRows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<StatistiqueDoc, "id">) }));
+
+// ✅ enrichissement live depuis "matieres"
+const matiereCache = new Map<string, Matiere | null>();
+
+const rows: StatistiqueDoc[] = await Promise.all(
+  rawRows.map(async (s) => {
+    const idM = s.id_matiere;
+    if (!idM) return s;
+
+    if (!matiereCache.has(idM)) {
+      const mSnap = await getDoc(doc(db, "matieres", idM));
+      matiereCache.set(idM, mSnap.exists() ? (mSnap.data() as Matiere) : null);
+    }
+
+    const m = matiereCache.get(idM);
+    if (!m) return s;
+
+    return {
+      ...s,
+      matiere: m.libelle_matiere ?? s.matiere,
+      enseignant: m.enseignant ?? s.enseignant,
+      coef: typeof m.coef === "number" ? m.coef : s.coef,
+      // si tu as aussi qualificatif dans Stat, ajoute-le ici
+      // qualificatif: m.qualificatif ?? s.qualificatif,
+    };
+  })
+);
+
+setStats(rows);
     } catch (e) {
       console.error(e);
       setErrorState(e instanceof Error ? e.message : "Erreur de chargement");
@@ -322,109 +354,153 @@ export default function EleveStatPage() {
     fetchBulletin();
   }, [fetchBulletin]);
 
-  const handleCreateBulletin = async () => {
-    if (!eleve || !statType || !repartition || !annee) return;
+  
 
-    if (isReadOnlyYear) {
-      alert("Historique: création bulletin désactivée.");
-      return;
+const handlePrintBulletin = useCallback(async () => {
+  if (!eleve || !classe || !statType || !repartition || !annee) return;
+
+  try {
+    setPrinting(true);
+    setErrorState(null);
+
+    // 1) Toujours relire le bulletin élève en base (version la plus récente)
+    const qBulletin = query(
+      collection(db, "bulletins"),
+      where("id_eleve", "==", eleve.id),
+      where("libelle_stat", "==", statType),
+      where("repartition", "==", repartition),
+      where("annee_scolaire", "==", annee),
+      limit(1)
+    );
+
+    const bSnap = await getDocs(qBulletin);
+    if (bSnap.empty) {
+      throw new Error("Aucun bulletin trouvé pour cette période.");
     }
 
-    try {
-      setCreatingBulletin(true);
-      setErrorState(null);
+    const bDoc = bSnap.docs[0];
+    const liveBulletin = { id: bDoc.id, ...(bDoc.data() as Omit<Bulletin, "id">) } as Bulletin;
 
-      const run = async (force: boolean) => {
-        const res = await fetch("/api/Bulletin/create-one", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id_eleve: eleve.id,
-            libelle_stat: statType,
-            repartition,
-            force,
-          }),
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json?.error ?? "Erreur création bulletin");
-        return json as { alreadyExists?: boolean };
+    // sync UI
+    setBulletin(liveBulletin);
+
+    // 2) Effectif classe (actifs)
+    const inscSnap = await getDocs(
+      query(
+        collection(db, "inscriptions"),
+        where("id_classe", "==", classe.id),
+        where("annee_scolaire", "==", annee),
+        where("statut", "==", "actif")
+      )
+    );
+    const effectifClasse = inscSnap.size;
+
+    // 3) Matières info (priorité aux matières réellement présentes dans les stats)
+    const statMatiereIds = Array.from(
+      new Set(
+        (Array.isArray(stats) ? stats : [])
+          .map((s) => s.id_matiere)
+          .filter((v): v is string => typeof v === "string" && v.length > 0)
+      )
+    );
+
+    const classMatiereIds = Array.isArray(classe.id_matieres) ? classe.id_matieres : [];
+    const matiereIds = Array.from(new Set([...statMatiereIds, ...classMatiereIds]));
+
+    const matiereInfoById: Record<
+      string,
+      Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere" | "enseignant">
+    > = {};
+
+    for (const id of matiereIds) {
+      const mSnap = await getDoc(doc(db, "matieres", id));
+      if (!mSnap.exists()) continue;
+      const m = mSnap.data() as Partial<Matiere>;
+
+      matiereInfoById[id] = {
+        coef: typeof m.coef === "number" ? m.coef : 1,
+        qualificatif: m.qualificatif === "Facultative" ? "Facultative" : "Fondamentale",
+        libelle_matiere: m.libelle_matiere ?? "",
+        enseignant: m.enseignant ?? "",
       };
-
-      const first = await run(false);
-
-      if (first.alreadyExists) {
-        const ok = confirm(
-          `Le bulletin ${statType} (${repartition}) existe déjà pour cet élève.\n` +
-            `Si tu continues, il sera recréé (écrasé).\n\nContinuer ?`
-        );
-        if (!ok) return;
-        await run(true);
-      }
-
-      await fetchBulletin();
-      alert("✅ Bulletin créé.");
-    } catch (e) {
-      console.error(e);
-      setErrorState(e instanceof Error ? e.message : "Erreur création bulletin");
-    } finally {
-      setCreatingBulletin(false);
     }
-  };
 
-  const handlePrintBulletin = useCallback(async () => {
-    if (!eleve || !classe || !bulletin || !statType || !repartition || !annee) return;
+    // 4) MG classe: priorité calcul depuis bulletins de la classe, fallback doc MG
+    const useAnnual = repartition === "Trimestre3" || repartition === "Semestre2";
 
-    try {
-      setPrinting(true);
-      setErrorState(null);
+    const classBulletinsSnap = await getDocs(
+      query(
+        collection(db, "bulletins"),
+        where("id_classe", "==", classe.id),
+        where("annee_scolaire", "==", annee),
+        where("libelle_stat", "==", statType),
+        where("repartition", "==", repartition)
+      )
+    );
 
-     const inscSnap = await getDocs(
-        query(
-          collection(db, "inscriptions"),
-          where("id_classe", "==", classe.id),
-          where("annee_scolaire", "==", annee),
-          where("statut", "==", "actif")
-        )
-      );
-      const effectifClasse = inscSnap.size;
+    const values = classBulletinsSnap.docs
+      .map((d) => {
+        const b = d.data() as Record<string, unknown>;
+        const raw = useAnnual ? b["moyenne_annuelle"] : b["moyenne_trimestrielle"];
+        const n =
+          typeof raw === "number"
+            ? raw
+            : typeof raw === "string"
+            ? Number(raw.replace(",", "."))
+            : NaN;
+        return Number.isFinite(n) ? n : null;
+      })
+      .filter((v): v is number => v !== null);
 
-      const matiereIds = Array.isArray(classe.id_matieres) ? classe.id_matieres : [];
-      const matiereInfoById: Record<string, Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere">> = {};
+    const mgId = `${classe.id}_${statType}_${repartition}_${annee}`;
+    const mgSnap = await getDoc(doc(db, "moyennes_generales_classes", mgId));
+    const mgData = mgSnap.exists() ? (mgSnap.data() as MoyenneGeneraleClasseDoc) : null;
 
-      for (const id of matiereIds) {
-        const mSnap = await getDoc(doc(db, "matieres", id));
-        if (!mSnap.exists) continue;
-        const m = mSnap.data() as Matiere;
+    const moyenneGeneraleClasse =
+      values.length > 0
+        ? Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(2))
+        : typeof mgData?.moyenneGenerale === "number"
+        ? mgData.moyenneGenerale
+        : null;
 
-        matiereInfoById[id] = {
-          coef: m.coef,
-          qualificatif: m.qualificatif,
-          libelle_matiere: m.libelle_matiere,
-        };
-      }
+    const faibleMoyenneClasse =
+      values.length > 0
+        ? Number(Math.min(...values).toFixed(2))
+        : typeof mgData?.moyenneFaible === "number"
+        ? mgData.moyenneFaible
+        : typeof mgData?.faibleMoyenne === "number"
+        ? mgData.faibleMoyenne
+        : null;
 
-      const mgId = `${classe.id}_${statType}_${repartition}_${annee}`;
-      const mgSnap = await getDoc(doc(db, "moyennes_generales_classes", mgId));
-      const mgData = mgSnap.exists() ? (mgSnap.data() as MoyenneGeneraleClasseDoc) : null;
-      const moyenneGeneraleClasse = typeof mgData?.moyenneGenerale === "number" ? mgData.moyenneGenerale : null;
+    const forteMoyenneClasse =
+      values.length > 0
+        ? Number(Math.max(...values).toFixed(2))
+        : typeof mgData?.moyenneForte === "number"
+        ? mgData.moyenneForte
+        : typeof mgData?.forteMoyenne === "number"
+        ? mgData.forteMoyenne
+        : null;
 
-      const filename = `Bulletin_${eleve.identite.nom_individu}_${eleve.identite.prenom_individu}_${statType}_${repartition}_${annee}.pdf`;
+    const filename = `Bulletin_${eleve.identite.nom_individu}_${eleve.identite.prenom_individu}_${statType}_${repartition}_${annee}.pdf`;
 
-      setPrintPayload({
-        filename,
-        bulletin,
-        matiereInfoById,
-        effectifClasse,
-        moyenneGeneraleClasse,
-      });
-      setPrintOpen(true);
-    } catch (e) {
-      console.error(e);
-      setErrorState(e instanceof Error ? e.message : "Erreur impression bulletin");
-    } finally {
-      setPrinting(false);
-    }
-  }, [eleve, classe, bulletin, statType, repartition, annee]);
+    setPrintPayload({
+      filename,
+      bulletin: liveBulletin,
+      matiereInfoById,
+      effectifClasse,
+      moyenneGeneraleClasse,
+      faibleMoyenneClasse,
+      forteMoyenneClasse,
+    });
+
+    setPrintOpen(true);
+  } catch (e) {
+    console.error(e);
+    setErrorState(e instanceof Error ? e.message : "Erreur impression bulletin");
+  } finally {
+    setPrinting(false);
+  }
+}, [eleve, classe, statType, repartition, annee, stats]);
 
   if (!statType) {
     return (
@@ -460,18 +536,20 @@ export default function EleveStatPage() {
   const baseLabel = isFinalRepartition(repartition) ? "Moyenne annuelle" : "Moyenne trimestrielle";
 
   return (
-    <div className="w-full p-6">
-      {printOpen && printPayload && (
-        <PrintSingleBulletinHost
-          open={printOpen}
-          onClose={() => setPrintOpen(false)}
-          filename={printPayload.filename}
-          bulletin={printPayload.bulletin}
-          matiereInfoById={printPayload.matiereInfoById}
-          effectifClasse={printPayload.effectifClasse}
-          moyenneGeneraleClasse={printPayload.moyenneGeneraleClasse}
-        />
-      )}
+  <div className="w-full p-6">
+    {printOpen && printPayload && (
+      <PrintSingleBulletinHost
+        open={printOpen}
+        onClose={() => setPrintOpen(false)}
+        filename={printPayload.filename}
+        bulletin={printPayload.bulletin}
+        matiereInfoById={printPayload.matiereInfoById}
+        effectifClasse={printPayload.effectifClasse}
+        moyenneGeneraleClasse={printPayload.moyenneGeneraleClasse}
+        faibleMoyenneClasse={printPayload.faibleMoyenneClasse}
+        forteMoyenneClasse={printPayload.forteMoyenneClasse}
+      />
+    )}
 
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -542,44 +620,20 @@ export default function EleveStatPage() {
         ) : null}
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-2 items-center">
-        <Button
-          variant="contained"
-          className="!bg-blue-600 hover:!bg-blue-700"
-          onClick={handleCreateBulletin}
-          disabled={!ready || creatingBulletin || isReadOnlyYear}
-          title={
-            isReadOnlyYear
-              ? "Historique: création désactivée"
-              : ready
-                ? "Créer le bulletin de cet élève"
-                : nbMatieres
-                  ? `Pas prêt: ${filteredStats.length}/${nbMatieres} matières ont une moyenne_matiere`
-                  : "Nombre de matières inconnu"
-          }
-        >
-          {creatingBulletin ? "Création..." : "Créer bulletin"}
-        </Button>
+        <div className="mb-4 flex flex-wrap gap-2 items-center">
+          <Button
+            variant="outlined"
+            onClick={handlePrintBulletin}
+            disabled={printing || !eleve || !classe || !statType || !repartition || !annee}
+            title="Imprimer le bulletin tel qu'il est enregistré en base"
+          >
+            {printing ? "Impression..." : "Imprimer bulletin"}
+          </Button>
 
-        <Button
-          variant="outlined"
-          onClick={handlePrintBulletin}
-          disabled={!bulletin || printing}
-          title={!bulletin ? "Crée d'abord le bulletin" : "Télécharger le bulletin en PDF"}
-        >
-          {printing ? "Impression..." : "Imprimer bulletin"}
-        </Button>
-
-        <div className="text-sm text-gray-600 dark:text-gray-300 ml-2">
-          {nbMatieres ? (
-            <span className={ready ? "text-red-600 font-semibold" : ""}>
-              Prêt: {filteredStats.length}/{nbMatieres}
-            </span>
-          ) : (
-            <span>—</span>
-          )}
+          <div className="text-sm text-gray-600 dark:text-gray-300 ml-2">
+            {nbMatieres ? <span>{filteredStats.length}/{nbMatieres} matières</span> : <span>—</span>}
+          </div>
         </div>
-      </div>
 
       {errorState && (
         <div className="mb-4 p-4 bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-300 rounded-lg">

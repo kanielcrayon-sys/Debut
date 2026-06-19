@@ -11,6 +11,8 @@ type MatiereInfo = { coef: number; qualificatif: "Fondamentale" | "Facultative" 
 
 const isStatType = (v: unknown): v is StatType => v === "Stat1" || v === "Stat2" || v === "Stat3";
 
+const isValidSchoolNote = (n: number) => Number.isFinite(n) && n >= 0 && n <= 20;
+
 const isRepartition = (v: unknown): v is Repartition =>
   v === "Trimestre1" || v === "Trimestre2" || v === "Trimestre3" || v === "Semestre1" || v === "Semestre2";
 
@@ -52,17 +54,16 @@ const loadMatieresInfoById = async (classe: Classe): Promise<Record<string, Mati
       if (!snap.exists) return null;
 
       const m = snap.data() as Partial<Matiere> | undefined;
-      const coef = typeof m?.coef === "number" ? m.coef : 1;
+      const rawCoef = typeof m?.coef === "number" ? m.coef : toNumber(m?.coef);
+      const coef = Number.isFinite(rawCoef) && rawCoef > 0 ? rawCoef : 1;
+
       const qualificatif = m?.qualificatif === "Facultative" ? "Facultative" : "Fondamentale";
       return [id, { coef, qualificatif }] as const;
     })
   );
 
   const map: Record<string, MatiereInfo> = {};
-  for (const e of entries) {
-    if (!e) continue;
-    map[e[0]] = e[1];
-  }
+  for (const e of entries) if (e) map[e[0]] = e[1];
   return map;
 };
 
@@ -71,17 +72,25 @@ const computeMoyenneTrimestrielle = (statsReady: Stat[], matiereInfoById: Record
   let sumCoefFond = 0;
   let bonus = 0;
 
+  const seenMatiere = new Set<string>();
+
   for (const st of statsReady) {
-    const info = matiereInfoById[st.id_matiere];
+    const matiereId = st.id_matiere;
+    if (!matiereId || seenMatiere.has(matiereId)) continue;
+    seenMatiere.add(matiereId);
+
+    const info = matiereInfoById[matiereId];
     if (!info) continue;
 
+    const coef = info.coef;
+    if (!Number.isFinite(coef) || coef <= 0) continue;
+
     const noteDef = toNumber(st.note_definitive);
-    if (!Number.isFinite(noteDef)) continue;
+    if (!isValidSchoolNote(noteDef)) continue;
 
     if (info.qualificatif === "Fondamentale") {
-      // ✅ pondéré par coef (cohérent avec create-for-class)
-      sumFond += noteDef * info.coef;
-      sumCoefFond += info.coef;
+      sumFond += noteDef * coef;
+      sumCoefFond += coef;
     } else {
       if (noteDef <= 10) bonus += 0;
       else if (noteDef <= 14) bonus += noteDef - 10;
@@ -230,26 +239,28 @@ const recomputeMoyenneGeneraleClasse = async (params: {
 
   const useAnnual = repartition === "Trimestre3" || repartition === "Semestre2";
 
-  let sum = 0;
-  let count = 0;
+  const values: number[] = [];
 
   bSnap.forEach((d) => {
     const b = d.data() as Partial<Bulletin> | undefined;
     const v = useAnnual ? b?.moyenne_annuelle : b?.moyenne_trimestrielle;
     if (typeof v !== "number" || !Number.isFinite(v)) return;
-    sum += v;
-    count += 1;
+    values.push(v);
   });
 
-  if (count !== effectif) {
+  if (values.length !== effectif) {
     return {
       ok: false as const,
       reason: "Certaines moyennes manquent",
-      details: { effectif, countAvecMoyenne: count },
+      details: { effectif, countAvecMoyenne: values.length },
     };
   }
 
+  const sum = values.reduce((a, b) => a + b, 0);
   const moyenneGenerale = parseFloat((sum / effectif).toFixed(2));
+  const moyenneFaible = parseFloat(Math.min(...values).toFixed(2));
+  const moyenneForte = parseFloat(Math.max(...values).toFixed(2));
+
   const now = new Date();
   const nowISO = now.toISOString();
   const docId = `${id_classe}_${libelle_stat}_${repartition}_${annee_scolaire}`;
@@ -263,6 +274,8 @@ const recomputeMoyenneGeneraleClasse = async (params: {
       repartition,
       annee_scolaire,
       moyenneGenerale,
+      moyenneFaible,
+      moyenneForte,
       nombreEleves: effectif,
       jour: now.getDate(),
       mois: now.getMonth() + 1,
@@ -274,7 +287,7 @@ const recomputeMoyenneGeneraleClasse = async (params: {
     { merge: true }
   );
 
-  return { ok: true as const, moyenneGenerale, effectif };
+  return { ok: true as const, moyenneGenerale, moyenneFaible, moyenneForte, effectif };
 };
 
 export async function POST(req: NextRequest) {
@@ -300,7 +313,7 @@ export async function POST(req: NextRequest) {
     const eleveSnap = await db.collection("eleves").doc(id_eleve).get();
     if (!eleveSnap.exists) return NextResponse.json({ error: "Élève introuvable" }, { status: 404 });
     const eleve = { id: eleveSnap.id, ...(eleveSnap.data() as Omit<Eleve, "id">) } as Eleve;
-    // Patch multi-année : On s'assure que cet élève a une inscription "officielle" dans cette classe ET cette année
+
     const inscSnap = await db
       .collection("inscriptions")
       .where("eleve_id", "==", id_eleve)
@@ -325,6 +338,7 @@ export async function POST(req: NextRequest) {
     const classeLibelle = classe.libelle_classe ?? "";
 
     const nbMatieres = getNbMatieres(classe);
+    const matiereInfoById = await loadMatieresInfoById(classe);
     if (!nbMatieres) return NextResponse.json({ error: "Nombre matières introuvable" }, { status: 400 });
 
     const statsSnap = await db
@@ -341,15 +355,37 @@ export async function POST(req: NextRequest) {
       ...(d.data() as Omit<Stat, "id">),
     })) as Stat[];
 
-    const statsReady = statsAll.filter((s) => isFiniteNumber(s.moyenne_matiere));
-    if (statsReady.length !== nbMatieres) {
-      return NextResponse.json(
-        { error: "Élève pas prêt", details: { nbMatieres, countStatsAvecMoyenne: statsReady.length } },
-        { status: 409 }
-      );
-    }
+      const statsReady = statsAll.filter((s) => {
+  if (!s.id_matiere) return false;
+  if (!matiereInfoById[s.id_matiere]) return false; // matière de la classe uniquement
 
-    const matiereInfoById = await loadMatieresInfoById(classe);
+  // assoupli: prêt si moyenne_matiere existe OU note_definitive valide
+  const hasMoyenne = isFiniteNumber(s.moyenne_matiere);
+  const noteDef = toNumber(s.note_definitive);
+  const hasValidNote = isValidSchoolNote(noteDef);
+
+  return hasMoyenne || hasValidNote;
+});
+
+const uniqueMatieres = new Set(statsReady.map((s) => s.id_matiere).filter(Boolean));
+if (uniqueMatieres.size !== nbMatieres) {
+  const matieresAttendues = new Set((classe.id_matieres ?? []).filter(Boolean));
+  const manquantes = [...matieresAttendues].filter((id) => !uniqueMatieres.has(id));
+
+  return NextResponse.json(
+    {
+      error: "Élève pas prêt",
+      details: {
+        nbMatieres,
+        countStatsAvecMoyenne: uniqueMatieres.size,
+        manquantes,
+      },
+    },
+    { status: 409 }
+  );
+}
+
+    
 
     const moyenne_trimestrielle = computeMoyenneTrimestrielle(statsReady, matiereInfoById);
 
@@ -385,7 +421,6 @@ export async function POST(req: NextRequest) {
       .toUpperCase()
       .replace(/\s+/g, " ");
 
-    // ✅ si on réécrit un bulletin final, on préserve "Admis par décision"
     const existing = bulletinSnap.exists ? (bulletinSnap.data() as Partial<Bulletin> | undefined) : null;
     const verdict = preserveDecisionVerdict(existing?.verdict ?? null, computedVerdict);
 
@@ -434,6 +469,8 @@ export async function POST(req: NextRequest) {
       repartition,
       annee_scolaire,
       moyenneGeneraleClasse: mg.ok ? mg.moyenneGenerale : null,
+      moyenneFaibleClasse: mg.ok ? mg.moyenneFaible : null,
+      moyenneForteClasse: mg.ok ? mg.moyenneForte : null,
     });
   } catch (error) {
     console.error("❌ Erreur POST /api/Bulletin/create-one:", error);

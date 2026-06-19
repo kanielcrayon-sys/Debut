@@ -2,19 +2,21 @@
 import React, { forwardRef, useMemo } from "react";
 import type { Bulletin, Matiere, Stat, Note } from "@/app/src/interface/data";
 
-type MatiereInfo = Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere">;
+type MatiereInfo = Pick<Matiere, "coef" | "qualificatif" | "libelle_matiere" | "enseignant">;
 
 function toNum(v: unknown): number | null {
-  const n = typeof v === "number"
-    ? v
-    : typeof v === "string"
-    ? Number(v.replace(",", "."))
-    : NaN;
+  const n =
+    typeof v === "number"
+      ? v
+      : typeof v === "string"
+      ? Number(v.replace(",", "."))
+      : NaN;
   return Number.isFinite(n) ? n : null;
 }
+
 function getNoteStat(noteArray: Note[] = [], key: string): number | null {
   if (!Array.isArray(noteArray)) return null;
-  const found = noteArray.find(n =>
+  const found = noteArray.find((n) =>
     (n.type_evaluation || "").toLowerCase().includes(key.toLowerCase())
   );
   return found ? toNum(found.valeur) : null;
@@ -22,6 +24,7 @@ function getNoteStat(noteArray: Note[] = [], key: string): number | null {
 
 const isFinalRepartition = (r: Bulletin["repartition"]): boolean =>
   r === "Trimestre3" || r === "Semestre2";
+
 
 export type BulletinPageProps = {
   bulletin: Bulletin;
@@ -67,42 +70,69 @@ export const BulletinPage = forwardRef<HTMLDivElement, BulletinPageProps>(functi
     [facultatives]
   );
 
-  const totalBonusFac = useMemo(() => {
-    let bonus = 0;
-    for (const st of facultatives) {
-      const noteDef = toNum(st.note_definitive);
-      if (noteDef === null) continue;
-      if (noteDef <= 10) bonus += 0;
-      else if (noteDef <= 14) bonus += noteDef - 10;
-      else bonus += 5;
-    }
-    return Number(bonus.toFixed(2));
-  }, [facultatives]);
-
   const ETABLISSEMENT_NOM = "COMPLEXE SCOLAIRE PAUL VALERY";
-  const moyenneAffichee = isFinalRepartition(bulletin.repartition)
-    ? bulletin.moyenne_annuelle
-    : bulletin.moyenne_trimestrielle;
+ const bonusFacultatif = useMemo(() => {
+  return facultatives.reduce((acc, st) => {
+    const nd = toNum(st.note_definitive);
+    if (nd === null) return acc;
+    if (nd <= 10) return acc;
+    if (nd <= 14) return acc + (nd - 10);
+    return acc + 5;
+  }, 0);
+}, [facultatives]);
 
-  const anneeScolaire =
-    bulletin.annee && !isNaN(Number(bulletin.annee))
-      ? `${bulletin.annee}-${Number(bulletin.annee) + 1}`
-      : bulletin.annee;
+const moyenneCalculee = useMemo(() => {
+  if (!totalCoefFond) return null;
+  return Number(((totalNoteDefFond + bonusFacultatif) / totalCoefFond).toFixed(2));
+}, [totalNoteDefFond, bonusFacultatif, totalCoefFond]);
+
+const moyenneStockee = toNum(
+  isFinalRepartition(bulletin.repartition)
+    ? bulletin.moyenne_annuelle
+    : bulletin.moyenne_trimestrielle
+);
+
+// priorité à la formule métier
+const moyenneAffichee = moyenneCalculee ?? moyenneStockee;
+
+ const anneeScolaire = useMemo(() => {
+      const y = toNum((bulletin as unknown as { annee_scolaire?: unknown }).annee_scolaire);
+      if (y !== null) return `${y}-${y + 1}`;
+
+      // fallback legacy si certains anciens docs ont encore "annee"
+      const legacy = toNum((bulletin as unknown as { annee?: unknown }).annee);
+      if (legacy !== null) return `${legacy}-${legacy + 1}`;
+
+      return "—";
+    }, [bulletin]);
 
   const tableauMoyennes = [
     { label: "TRIM", value: String(bulletin.repartition ?? "--").toUpperCase() },
-    { label: "MOYENNE", value: <b className="text-lg">{moyenneAffichee ?? ""}</b> },
-    { label: "RANG", value: <>{<b>{bulletin.rang ?? ""}</b>} / {effectifClasse || ""}</> },
-    { label: "EFFECT", value: effectifClasse || "" },
-    { label: "FAIBLE MOY", value: faibleMoyenneClasse ?? "" },
-    { label: "FORTE MOY", value: forteMoyenneClasse ?? "" },
-    { label: "MOY GEN", value: moyenneGeneraleClasse ?? "" }
+    { label: "MOYENNE", value: <b className="text-lg">{moyenneAffichee ?? "-"}</b> },
+    { label: "RANG", value: <><b>{bulletin.rang ?? "-"}</b> / {effectifClasse || "-"}</> },
+    { label: "EFFECT", value: effectifClasse || "-" },
+   { label: "FAIBLE MOY", value: <b>{String(faibleMoyenneClasse)}</b> },
+{ label: "FORTE MOY", value: <b>{String(forteMoyenneClasse)}</b> },
+{ label: "MOY GEN", value: <b>{String(moyenneGeneraleClasse)}</b> },
   ];
 
-  // Shared cell classes
   const th = "border border-black p-1 bg-gray-100 text-xs";
   const td = "border border-black p-1 text-xs";
   const tdCenter = td + " text-center";
+
+  const observationAffichee =
+  String(
+    (bulletin as unknown as { observation?: string; observations?: string }).observation ??
+      (bulletin as unknown as { observations?: string }).observations ??
+      ""
+  ).trim() || "—";
+
+const verdictAffiche =
+  String(
+    (bulletin as unknown as { verdict?: string; decision_conseil?: string }).verdict ??
+      (bulletin as unknown as { decision_conseil?: string }).decision_conseil ??
+      ""
+  ).trim() || "—";
 
   return (
     <div
@@ -138,10 +168,10 @@ export const BulletinPage = forwardRef<HTMLDivElement, BulletinPageProps>(functi
         </div>
       </div>
 
-      {/* CORPS : Trois blocs/tables alignés */}
-      <div className="flex gap-3 items-stretch mb-2.5">
-        {/* TABLE FONDAMENTAL */}
-        <div className="flex-2 w-0 min-w-0">
+      {/* CORPS */}
+      <div className="mb-2.5">
+        <div className="w-full">
+          {/* TABLE FONDAMENTAL */}
           <div className="font-extrabold mb-1 text-center">MATIÈRES FONDAMENTALES</div>
           <table className="w-full border-collapse mb-2">
             <thead>
@@ -172,7 +202,7 @@ export const BulletinPage = forwardRef<HTMLDivElement, BulletinPageProps>(functi
                     <td className={tdCenter}>{toNum(st.moyenne_matiere) ?? ""}</td>
                     <td className={tdCenter}>{info?.coef ?? st.coef ?? ""}</td>
                     <td className={tdCenter}>{toNum(st.note_definitive) ?? ""}</td>
-                    <td className={tdCenter}>{st.enseignant ?? ""}</td>
+                    <td className={tdCenter}>{info?.enseignant ?? st.enseignant ?? ""}</td>
                     <td className={tdCenter}>{st.observations ?? ""}</td>
                     <td className={td} />
                   </tr>
@@ -226,7 +256,7 @@ export const BulletinPage = forwardRef<HTMLDivElement, BulletinPageProps>(functi
                         <td className={tdCenter}>{toNum(st.moyenne_matiere) ?? ""}</td>
                         <td className={tdCenter}>{info?.coef ?? st.coef ?? ""}</td>
                         <td className={tdCenter}>{toNum(st.note_definitive) ?? ""}</td>
-                        <td className={tdCenter}>{st.enseignant ?? ""}</td>
+                       <td className={tdCenter}>{info?.enseignant ?? st.enseignant ?? ""}</td>
                         <td className={tdCenter}>{st.observations ?? ""}</td>
                         <td className={td} />
                       </tr>
@@ -250,13 +280,13 @@ export const BulletinPage = forwardRef<HTMLDivElement, BulletinPageProps>(functi
           )}
         </div>
 
-        {/* Tableau des moyennes à droite */}
-        <div className="flex-1 border border-gray-800 bg-gray-50 text-xs max-w-[150px] min-w-[110px] h-fit">
+        {/* Tableau des moyennes APRES les matières */}
+        <div className="mt-2 w-[240px] border border-gray-800 bg-gray-50 text-xs">
           <table className="w-full border-collapse">
             <tbody>
               {tableauMoyennes.map((moy, idx) => (
                 <tr key={moy.label}>
-                  <td className={"border border-black p-1 font-bold w-[60px]" + (idx === 0 ? " bg-gray-100" : "")}>
+                  <td className={"border border-black p-1 font-bold w-[90px]" + (idx === 0 ? " bg-gray-100" : "")}>
                     {moy.label}
                   </td>
                   <td className={"border border-black p-1 text-center" + (idx === 0 ? " bg-gray-100" : "")}>
@@ -273,7 +303,16 @@ export const BulletinPage = forwardRef<HTMLDivElement, BulletinPageProps>(functi
       <div className="flex gap-3 mt-4">
         <div className="flex-2 border border-black p-2 min-h-[90px]">
           <div className="font-extrabold mb-1.5">OBSERVATIONS / DÉCISIONS DU CONSEIL DES PROFESSEURS</div>
-          <div className="border-dashed border border-gray-500 min-h-[60px]" />
+          <div className="border-dashed border border-gray-500 min-h-[60px] p-2 text-[11px] leading-5">
+            <div>
+              <span className="font-semibold">Observation : </span>
+              {observationAffichee}
+            </div>
+            <div className="mt-1">
+              <span className="font-semibold">Verdict : </span>
+              {verdictAffiche}
+            </div>
+          </div>
           <div className="flex gap-4 mt-1 text-[11px]">
             <div>Retards: ________ </div>
             <div>Absences: ________ </div>

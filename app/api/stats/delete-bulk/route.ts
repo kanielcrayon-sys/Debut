@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/app/src/lib/firebase-admin";
 
 type StatType = "Stat1" | "Stat2" | "Stat3";
+type Repartition = "Trimestre1" | "Trimestre2" | "Trimestre3" | "Semestre1" | "Semestre2";
 
 type EleveStatEntryObject = {
   id?: string;
@@ -25,21 +26,23 @@ export async function POST(req: NextRequest) {
       classeId?: string;
       matiereId?: string;
       libelle_stat?: StatType;
-      annee_scolaire?: number; // ⚠️ Requis maintenant !
+      repartition?: Repartition;
+      annee_scolaire?: number;
     };
 
-    const { classeId, matiereId, libelle_stat, annee_scolaire } = body;
+    const { classeId, matiereId, libelle_stat, repartition, annee_scolaire } = body;
 
-    if (!classeId || !matiereId || !libelle_stat || typeof annee_scolaire !== "number") {
+    if (!classeId || !matiereId || !libelle_stat || !repartition || typeof annee_scolaire !== "number") {
       return NextResponse.json({ error: "Paramètres invalides" }, { status: 400 });
     }
 
-    // 1) Supprimer les stats de la classe/matière/libelle_stat/annee_scolaire choisis
+    // 1) Supprimer les stats de la classe/matière/libelle_stat/repartition/annee_scolaire choisis
     const snap = await db
       .collection("statistique")
       .where("id_classe", "==", classeId)
       .where("id_matiere", "==", matiereId)
       .where("libelle_stat", "==", libelle_stat)
+      .where("repartition", "==", repartition)
       .where("annee_scolaire", "==", annee_scolaire)
       .get();
 
@@ -84,23 +87,35 @@ export async function POST(req: NextRequest) {
 
       for (const e of elevesSnap.docs) {
         const data = e.data() as EleveDoc | undefined;
-        const statArr = Array.isArray(data?.stat) ? data!.stat! : [];
+        const statArr = Array.isArray(data?.stat) ? data.stat : [];
 
         const filtered = statArr.filter((entry) => {
           // Format 1: string id
           if (typeof entry === "string") {
             return !statIdSet.has(entry);
           }
+
           // Format 2: objet
           if (isObject(entry)) {
             const obj = entry as EleveStatEntryObject;
-            if (!obj.id) return true;
-            if (statIdSet.has(obj.id)) return false;
+
+            // Si id connu et ciblé => supprime
+            if (obj.id && statIdSet.has(obj.id)) return false;
+
+            // Sans id : fallback sur critères métier
             const lib = String(obj.libelle_stat ?? "");
             if (lib !== libelle_stat) return true;
-            if (!obj.id_matiere) return false;
-            return obj.id_matiere !== matiereId;
+
+            const mat = String(obj.id_matiere ?? "");
+            if (mat !== matiereId) return true;
+
+            const rep = String(obj.repartition ?? "");
+            if (rep && rep !== repartition) return true;
+
+            // même stat + même matière + (repartition vide ou égale) => supprime
+            return false;
           }
+
           return true;
         });
 
@@ -115,7 +130,7 @@ export async function POST(req: NextRequest) {
       success: true,
       deleted,
       removedIds: statDocIdsToDelete.length,
-      elevesNettoyés: eleveIds.length,
+      elevesNettoyes: eleveIds.length,
     });
   } catch (e) {
     console.error("❌ POST /api/stats/delete-bulk:", e);

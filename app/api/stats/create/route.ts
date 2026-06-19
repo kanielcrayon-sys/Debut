@@ -22,8 +22,7 @@ type EleveDoc = {
 };
 
 type SettingsScolariteDoc = {
-  // ✅ convention: année de début (ex: 2025 => 2025-2026)
-  annee_scolaire_active: number;
+  annee_scolaire_active: number; // ex: 2025 => 2025-2026
   createdAt?: string;
   updatedAt?: string;
 };
@@ -61,7 +60,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Paramètres invalides" }, { status: 400 });
     }
 
-    // ✅ validation règle métier
     if (!allowedRepartitionsFor(libelle_stat).includes(repartition)) {
       return NextResponse.json(
         { error: `Repartition ${repartition} interdite pour ${libelle_stat}` },
@@ -69,12 +67,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ année scolaire active (année de début: 2025 => 2025-2026)
     const annee_scolaire = await getAnneeScolaireActive();
 
-    console.log(
-      `📊 Création Stats (classe entière) - Libelle: ${libelle_stat}, Repartition: ${repartition}, Année scolaire: ${annee_scolaire}-${annee_scolaire + 1}`
-    );
+    console.log("[CREATE] START", {
+      classeId,
+      matiereId,
+      libelle_stat,
+      repartition,
+      annee_scolaire,
+    });
 
     // 1) Charger classe + matière
     const [classeDoc, matiereDoc] = await Promise.all([
@@ -82,13 +83,20 @@ export async function POST(req: NextRequest) {
       db.collection("matieres").doc(matiereId).get(),
     ]);
 
-    if (!classeDoc.exists) return NextResponse.json({ error: "Classe introuvable" }, { status: 404 });
-    if (!matiereDoc.exists) return NextResponse.json({ error: "Matière introuvable" }, { status: 404 });
+    if (!classeDoc.exists) {
+      console.log("[CREATE] Classe introuvable", { classeId });
+      return NextResponse.json({ error: "Classe introuvable" }, { status: 404 });
+    }
+
+    if (!matiereDoc.exists) {
+      console.log("[CREATE] Matière introuvable", { matiereId });
+      return NextResponse.json({ error: "Matière introuvable" }, { status: 404 });
+    }
 
     const classeData = classeDoc.data();
     const matiereData = matiereDoc.data();
 
-    // 2) Récupérer TOUS les élèves ACTIFS selon "inscriptions" + année scolaire
+    // 2) Récupérer élèves actifs via inscriptions
     const inscriptionsSnap = await db
       .collection("inscriptions")
       .where("id_classe", "==", classeId)
@@ -96,37 +104,67 @@ export async function POST(req: NextRequest) {
       .where("statut", "==", "actif")
       .get();
 
+    console.log("[CREATE] inscriptions actifs", inscriptionsSnap.size);
+
     if (inscriptionsSnap.empty) {
-      return NextResponse.json({ success: false, message: "Aucun élève actif trouvé pour cette année/scolaire", created: 0 }, { status: 200 });
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Aucun élève actif trouvé pour cette année scolaire",
+          created: 0,
+          annee_scolaire,
+        },
+        { status: 200 }
+      );
     }
-    const eleveIds = inscriptionsSnap.docs
+
+    const rawEleveIds = inscriptionsSnap.docs
       .map((d) => d.data().eleve_id)
-      .filter((id): id is string => typeof id === "string");
+      .filter((id): id is string => typeof id === "string" && id.trim().length > 0);
 
-    // 3) Éviter les doublons (déjà filtrés par année scolaire)
-    const existingStatsSnap = await db
-      .collection("statistique")
-      .where("id_classe", "==", classeId)
-      .where("id_matiere", "==", matiereId)
-      .where("libelle_stat", "==", libelle_stat)
-      .where("annee_scolaire", "==", annee_scolaire)
-      .get();
+    const eleveIds = Array.from(new Set(rawEleveIds));
 
-    const alreadyHasStat = new Set<string>(); // eleveId
-    existingStatsSnap.forEach((d) => {
-      const s = d.data() as Partial<{ id_eleve: string; repartition: Repartition }>;
-      if (!s.id_eleve) return;
-      // Si tu veux éviter le doublon par repartition aussi, décommente:
-      // if (s.repartition !== repartition) return;
-      alreadyHasStat.add(s.id_eleve);
-    });
+    console.log("[CREATE] eleveIds actifs (unique)", eleveIds.length, eleveIds);
 
-    const toCreateEleveIds = eleveIds.filter((id) => !alreadyHasStat.has(id));
+    if (eleveIds.length === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Aucun eleve_id valide trouvé dans inscriptions.",
+          created: 0,
+          annee_scolaire,
+        },
+        { status: 200 }
+      );
+    }
+
+    // 3) Vérification ROBUSTE par élève (évite faux positifs global query)
+    const toCreateEleveIds: string[] = [];
+    const alreadyHasStat: string[] = [];
+
+    for (const eleveId of eleveIds) {
+      const check = await db
+        .collection("statistique")
+        .where("id_classe", "==", classeId)
+        .where("id_matiere", "==", matiereId)
+        .where("id_eleve", "==", eleveId)
+        .where("libelle_stat", "==", libelle_stat)
+        .where("repartition", "==", repartition)
+        .where("annee_scolaire", "==", annee_scolaire)
+        .limit(1)
+        .get();
+
+      if (check.empty) toCreateEleveIds.push(eleveId);
+      else alreadyHasStat.push(eleveId);
+    }
+
+    console.log("[CREATE] alreadyHasStat", alreadyHasStat.length, alreadyHasStat);
+    console.log("[CREATE] toCreateEleveIds", toCreateEleveIds.length, toCreateEleveIds);
 
     if (toCreateEleveIds.length === 0) {
       return NextResponse.json({
         success: true,
-        message: `${libelle_stat} existe déjà pour tous les élèves (rien à créer).`,
+        message: `${libelle_stat}/${repartition} existe déjà pour tous les élèves (rien à créer).`,
         created: 0,
         annee_scolaire,
       });
@@ -139,23 +177,27 @@ export async function POST(req: NextRequest) {
       id_classe: classeId,
       id_matiere: matiereId,
       id_enseignant: matiereData?.id_enseignant ?? null,
+
       libelle_stat,
       repartition,
+
       classe: classeData?.libelle_classe ?? "",
       matiere: matiereData?.libelle_matiere ?? "",
       enseignant: matiereData?.enseignant ?? "Non assigné",
+
       jour: now.getDate(),
       mois: now.getMonth() + 1,
       annee: now.getFullYear(),
       date: nowISO.split("T")[0],
-      annee_scolaire, // ✅ AJOUT CRITIQUE
+      annee_scolaire,
+
       notes: [],
       cloture: false,
       createdAt: nowISO,
       updatedAt: nowISO,
     };
 
-    // 4) Créer stats + update eleves.stat
+    // 4) Créer stats en batch
     let created = 0;
     const statIdByEleve: Record<string, string> = {};
 
@@ -175,9 +217,10 @@ export async function POST(req: NextRequest) {
 
       await batch.commit();
       created += chunk.length;
+      console.log("[CREATE] batch committed", { chunkSize: chunk.length, createdSoFar: created });
     }
 
-    // 5) Mise à jour eleves.stat (format stable)
+    // 5) Mise à jour eleves.stat sans doublons
     for (let i = 0; i < toCreateEleveIds.length; i += 200) {
       const chunk = toCreateEleveIds.slice(i, i + 200);
 
@@ -185,8 +228,13 @@ export async function POST(req: NextRequest) {
         chunk.map(async (eleveId) => {
           const eleveRef = db.collection("eleves").doc(eleveId);
           const eleveSnap = await eleveRef.get();
-          const eleveData = eleveSnap.data() as EleveDoc | undefined;
 
+          if (!eleveSnap.exists) {
+            console.log("[CREATE] eleve introuvable pour update stat[]", { eleveId });
+            return;
+          }
+
+          const eleveData = eleveSnap.data() as EleveDoc | undefined;
           const existing = Array.isArray(eleveData?.stat) ? (eleveData!.stat as unknown[]) : [];
 
           const entry: EleveStatEntry = {
@@ -196,10 +244,32 @@ export async function POST(req: NextRequest) {
             id_matiere: matiereId,
           };
 
-          await eleveRef.update({ stat: [...existing, entry] });
+          const alreadyInEleveStat = existing.some((x) => {
+            if (!x || typeof x !== "object") return false;
+            const r = x as Partial<EleveStatEntry>;
+            return (
+              r.id === entry.id ||
+              (r.libelle_stat === entry.libelle_stat &&
+                r.repartition === entry.repartition &&
+                r.id_matiere === entry.id_matiere)
+            );
+          });
+
+          if (!alreadyInEleveStat) {
+            await eleveRef.update({ stat: [...existing, entry] });
+          }
         })
       );
     }
+
+    console.log("[CREATE] DONE", {
+      classeId,
+      matiereId,
+      libelle_stat,
+      repartition,
+      annee_scolaire,
+      created,
+    });
 
     return NextResponse.json({
       success: true,
@@ -208,7 +278,7 @@ export async function POST(req: NextRequest) {
       annee_scolaire,
     });
   } catch (error) {
-    console.error("❌ Erreur POST stats/create:", error);
+    console.error("❌ Erreur POST /api/stats/create:", error);
     return NextResponse.json(
       { error: "Erreur lors de la création des stats", details: String(error) },
       { status: 500 }

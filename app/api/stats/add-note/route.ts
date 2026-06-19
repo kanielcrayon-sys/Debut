@@ -198,26 +198,42 @@ export async function POST(req: NextRequest) {
       .get();
 
     interface EleveWithMoyenne {
-      statId: string;
-      moyenneMatiere: number | null;
-      nom: string;
-    }
+  statId: string;
+  moyenneClasse: number | null;
+  moyenneMatiere: number | null;
+  coef: number;
+  noteDefinitive: number | null;
+  observations: StatObservation;
+  nom: string;
+}
 
     const elevesWithMoyennes: EleveWithMoyenne[] = [];
     const statDataMap = new Map<string, Stat>();
 
     snapshot.forEach((docSnap) => {
-      const docData = docSnap.data() as Stat;
-      const notes: Note[] = Array.isArray(docData.notes) ? docData.notes : [];
-      const docMoyenneMatiere = calculateMoyenneMatiere(notes);
+  const docData = docSnap.data() as Stat;
+  const notes: Note[] = Array.isArray(docData.notes) ? docData.notes : [];
 
-      statDataMap.set(docSnap.id, docData);
-      elevesWithMoyennes.push({
-        statId: docSnap.id,
-        moyenneMatiere: docMoyenneMatiere,
-        nom: docData.identite?.nom_individu || "",
-      });
-    });
+  const docMoyenneClasse = calculateMoyenneClasse(notes);
+  const docMoyenneMatiere = calculateMoyenneMatiere(notes);
+
+  // coef: priorité au doc courant (déjà synchronisé), fallback 1
+ const docCoef = coef;
+  const docNoteDefinitive = calculateNoteDefinitive(docMoyenneMatiere, docCoef);
+  const docObservations = calculateObservationsFromMoyenne(docMoyenneMatiere);
+
+  statDataMap.set(docSnap.id, docData);
+
+  elevesWithMoyennes.push({
+    statId: docSnap.id,
+    moyenneClasse: docMoyenneClasse,
+    moyenneMatiere: docMoyenneMatiere,
+    coef: docCoef,
+    noteDefinitive: docNoteDefinitive,
+    observations: docObservations,
+    nom: docData.identite?.nom_individu || "",
+  });
+});
 
     // ✅ TRIER PAR MOYENNE_MATIERE DÉCROISSANTE, PUIS PAR NOM
     elevesWithMoyennes.sort((a, b) => {
@@ -273,11 +289,16 @@ export async function POST(req: NextRequest) {
         return { ...note, rang: noteRang };
       });
 
-      await updateStatRef.update({
-        notes: notesWithRang,
-        rang: eleve.moyenneMatiere !== null ? currentRang : null,
-        rang_label: rangLabel,
-      });
+     await updateStatRef.update({
+  notes: notesWithRang,
+  moyenne_classe: eleve.moyenneClasse,
+  moyenne_matiere: eleve.moyenneMatiere,
+  coef: eleve.coef,
+  note_definitive: eleve.noteDefinitive,
+  observations: eleve.observations,
+  rang: eleve.moyenneMatiere !== null ? currentRang : null,
+  rang_label: rangLabel,
+});
     }
 
     return NextResponse.json({

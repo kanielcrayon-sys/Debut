@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
     const data = docSnap.data() as Record<string, unknown>;
 
-    // ✅ sécurité: si l'URL fournit des ids, on vérifie la cohérence
+    // ✅ sécurité cohérence URL
     if (eleveId && data.id_eleve !== eleveId) {
       return NextResponse.json({ error: "Stat ne correspond pas à cet élève" }, { status: 400 });
     }
@@ -34,10 +34,33 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Stat ne correspond pas à cette classe" }, { status: 400 });
     }
 
+    // ✅ Enrichir avec la matière ACTUELLE
+    const idMatiere = (data.id_matiere as string | undefined) ?? matiereId ?? null;
+
+    let matiereLibelle = data.matiere;
+    let enseignant = data.enseignant;
+    let coef = data.coef;
+
+    if (idMatiere) {
+      const matiereSnap = await db.collection("matieres").doc(idMatiere).get();
+      if (matiereSnap.exists) {
+        const m = matiereSnap.data() as Record<string, unknown>;
+
+        matiereLibelle = (m.libelle_matiere as string | undefined) ?? matiereLibelle;
+        enseignant = (m.enseignant as string | undefined) ?? enseignant;
+        coef = (m.coef as number | undefined) ?? coef;
+      }
+    }
+
     return NextResponse.json({
       data: {
         id: docSnap.id,
         ...data,
+
+        // ✅ valeurs fraîches (écrasent snapshot si dispo)
+        matiere: matiereLibelle,
+        enseignant,
+        coef,
       },
     });
   } catch (e) {

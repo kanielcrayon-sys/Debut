@@ -1328,8 +1328,8 @@ console.log(
                     <tr>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">N° - Nom & Prénom</th>
                       <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">Sexe</th>
+                      <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white"> Statut</th>
                       <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">Ancienneté</th>
-                      <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">Statut</th>
                       <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">En Règle</th>
                       
                       <th className="px-6 py-3 text-center text-sm font-semibold text-gray-900 dark:text-white">Actions</th>
